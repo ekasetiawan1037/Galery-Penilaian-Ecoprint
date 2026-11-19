@@ -10,6 +10,8 @@ export interface ClassDefinition {
   label: string;
 }
 
+export type PhotoKind = 'artwork' | 'group';
+
 export interface ArtworkMetadataOverride {
   photoUrl?: string | null;
   photoUpdatedAt?: string | null;
@@ -19,6 +21,14 @@ export interface ArtworkMetadataOverride {
   driveFileId?: string | null;
   driveWebViewLink?: string | null;
   driveSyncedAt?: string | null;
+  groupPhotoUrl?: string | null;
+  groupPhotoUpdatedAt?: string | null;
+  groupOriginalFileName?: string | null;
+  groupOriginalFileSize?: number | null;
+  groupOriginalMimeType?: string | null;
+  groupDriveFileId?: string | null;
+  groupDriveWebViewLink?: string | null;
+  groupDriveSyncedAt?: string | null;
   memberNames?: string;
   artworkTitle?: string;
   technique?: string;
@@ -42,6 +52,7 @@ export interface DriveArchiveConfig {
   classFolderIds?: Record<string, string>;
   manifestFileId: string | null;
   csvFileId?: string | null;
+  driveWebhookUrl?: string | null;
   lastSyncedAt: string | null;
 }
 
@@ -65,6 +76,14 @@ export interface ArtworkGroup {
   driveFileId: string | null;
   driveWebViewLink: string | null;
   driveSyncedAt: string | null;
+  groupPhotoUrl: string | null;
+  groupPhotoUpdatedAt: string | null;
+  groupOriginalFileName: string | null;
+  groupOriginalFileSize: number | null;
+  groupOriginalMimeType: string | null;
+  groupDriveFileId: string | null;
+  groupDriveWebViewLink: string | null;
+  groupDriveSyncedAt: string | null;
 }
 
 export interface GroupPasswordItem {
@@ -125,6 +144,7 @@ export interface RecapitulationSummary {
   totalGroups: number;
   submittedGroupsCount: number;
   uploadedPhotosCount: number;
+  uploadedGroupPhotosCount: number;
   driveSyncedCount: number;
   totalVotesCast: number;
   totalPointsDistributed: number;
@@ -300,6 +320,14 @@ export const BASE_ARTWORK_CATALOG: ArtworkGroup[] = (() => {
         driveFileId: null,
         driveWebViewLink: null,
         driveSyncedAt: null,
+        groupPhotoUrl: null,
+        groupPhotoUpdatedAt: null,
+        groupOriginalFileName: null,
+        groupOriginalFileSize: null,
+        groupOriginalMimeType: null,
+        groupDriveFileId: null,
+        groupDriveWebViewLink: null,
+        groupDriveSyncedAt: null,
       });
       idx++;
     }
@@ -331,6 +359,14 @@ export function buildCatalogWithOverrides(
       driveFileId: ov.driveFileId ?? null,
       driveWebViewLink: ov.driveWebViewLink ?? null,
       driveSyncedAt: ov.driveSyncedAt ?? null,
+      groupPhotoUrl: ov.groupPhotoUrl ?? null,
+      groupPhotoUpdatedAt: ov.groupPhotoUpdatedAt ?? null,
+      groupOriginalFileName: ov.groupOriginalFileName ?? null,
+      groupOriginalFileSize: ov.groupOriginalFileSize ?? null,
+      groupOriginalMimeType: ov.groupOriginalMimeType ?? null,
+      groupDriveFileId: ov.groupDriveFileId ?? null,
+      groupDriveWebViewLink: ov.groupDriveWebViewLink ?? null,
+      groupDriveSyncedAt: ov.groupDriveSyncedAt ?? null,
     };
   });
 }
@@ -547,7 +583,12 @@ export function computeRecapitulation(
   return {
     totalGroups: catalog.length,
     submittedGroupsCount: submissions.length,
-    uploadedPhotosCount: catalog.filter((a) => Boolean(a.photoUrl || a.driveWebViewLink)).length,
+    uploadedPhotosCount: catalog.filter((a) =>
+      Boolean(a.photoUrl || a.driveWebViewLink || a.driveFileId),
+    ).length,
+    uploadedGroupPhotosCount: catalog.filter((a) =>
+      Boolean(a.groupPhotoUrl || a.groupDriveWebViewLink || a.groupDriveFileId),
+    ).length,
     driveSyncedCount: catalog.filter((a) => Boolean(a.driveFileId)).length,
     totalVotesCast,
     totalPointsDistributed,

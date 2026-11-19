@@ -54,6 +54,7 @@ interface ApiStateResponse {
   submissions: AssessmentSubmission[];
   recapitulation: RecapitulationSummary;
   driveConfig: DriveArchiveConfig;
+  driveBridgeConnected?: boolean;
   revision?: number;
   updatedAt: string;
   runtimeInfo?: RuntimeStorageInfo;
@@ -68,6 +69,7 @@ const INITIAL_DRIVE_CONFIG: DriveArchiveConfig = {
   driveFolderUrl: null,
   driveOwnerEmail: null,
   manifestFileId: null,
+  driveWebhookUrl: null,
   lastSyncedAt: null,
 };
 
@@ -79,6 +81,7 @@ export default function App() {
     computeRecapitulation([], BASE_ARTWORK_CATALOG),
   );
   const [driveConfig, setDriveConfig] = useState<DriveArchiveConfig>(INITIAL_DRIVE_CONFIG);
+  const [driveBridgeConnected, setDriveBridgeConnected] = useState(false);
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeStorageInfo | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -151,6 +154,9 @@ export default function App() {
       setRecapitulation(data.recapitulation);
       if (data.driveConfig) {
         setDriveConfig(data.driveConfig);
+      }
+      if (typeof data.driveBridgeConnected === 'boolean') {
+        setDriveBridgeConnected(data.driveBridgeConnected);
       }
       if (data.runtimeInfo) {
         setRuntimeInfo(data.runtimeInfo);
@@ -321,10 +327,14 @@ export default function App() {
     [driveAccessToken, adminToken, driveUser?.email, applyApiState],
   );
 
-  // Instant sync whenever a new photo appears in catalog while teacher Drive is connected
+  // Instant sync whenever a new artwork or group photo appears in catalog while teacher Drive is connected
   useEffect(() => {
     if (!adminToken || !driveAccessToken || driveActivationUrl) return;
-    const hasPending = catalog.some((art) => Boolean(art.photoUrl) && !art.driveFileId);
+    const hasPending = catalog.some(
+      (art) =>
+        (Boolean(art.photoUrl) && !art.driveFileId) ||
+        (Boolean(art.groupPhotoUrl) && !art.groupDriveFileId),
+    );
     if (hasPending && !syncingRef.current) {
       syncPendingPhotosToDrive(undefined, undefined, false, false);
     }
@@ -343,7 +353,9 @@ export default function App() {
           applyApiState(data, { fromPoll: true });
           if (adminToken && driveAccessToken && !driveActivationUrl) {
             const hasPending = data.catalog.some(
-              (art) => Boolean(art.photoUrl) && !art.driveFileId,
+              (art) =>
+                (Boolean(art.photoUrl) && !art.driveFileId) ||
+                (Boolean(art.groupPhotoUrl) && !art.groupDriveFileId),
             );
             if (hasPending && !syncingRef.current) {
               await syncPendingPhotosToDrive(undefined, undefined, false, false);
@@ -373,6 +385,17 @@ export default function App() {
       const { user, accessToken } = await signInWithGoogleDrive();
       setDriveUser(user);
       setDriveAccessToken(accessToken);
+      if (adminToken) {
+        await fetch('/api/admin/drive-session', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${adminToken}`,
+            'X-Drive-Token': accessToken,
+          },
+          body: JSON.stringify({ ownerEmail: user.email }),
+        }).catch(() => {});
+      }
       await syncPendingPhotosToDrive(accessToken, user.email, true, true, true);
     } catch (err) {
       const msg =
@@ -446,12 +469,62 @@ export default function App() {
 
   const handleGoogleDriveSignOut = async () => {
     await signOutGoogleDrive();
+    if (adminToken) {
+      await fetch('/api/admin/drive-disconnect', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${adminToken}` },
+      })
+        .then(async (res) => {
+          if (res.ok) {
+            const d = (await res.json()) as { state?: ApiStateResponse };
+            if (d.state) applyApiState(d.state);
+          }
+        })
+        .catch(() => {});
+    }
     setDriveUser(null);
     setDriveAccessToken(null);
     setDriveError(null);
     setDriveActivationUrl(null);
     setDriveFolderFiles([]);
     setToastMessage('Akun Google Drive telah diputus dari sesi ini.');
+  };
+
+  const handleSaveDriveWebhook = async (driveWebhookUrl: string): Promise<boolean> => {
+    if (!adminToken) return false;
+    setDriveError(null);
+    try {
+      const res = await fetch('/api/admin/drive-webhook', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({ driveWebhookUrl }),
+      });
+      const payload = (await res.json()) as {
+        state?: ApiStateResponse;
+        error?: string;
+      };
+      if (!res.ok) {
+        const msg = payload.error || 'Gagal menyimpan URL Bridge Apps Script.';
+        setDriveError(msg);
+        setToastMessage(msg);
+        return false;
+      }
+      if (payload.state) {
+        applyApiState(payload.state);
+      }
+      setToastMessage(
+        driveWebhookUrl.trim()
+          ? 'Bridge Apps Script 24 jam berhasil diaktifkan.'
+          : 'Bridge Apps Script dinonaktifkan.',
+      );
+      return true;
+    } catch {
+      setToastMessage('Gagal menghubungi server saat menyimpan URL Bridge.');
+      return false;
+    }
   };
 
   const handleRefreshDriveFiles = async () => {
@@ -836,6 +909,7 @@ export default function App() {
             submissions={submissions}
             recapitulation={recapitulation}
             driveConfig={driveConfig}
+            driveBridgeConnected={driveBridgeConnected}
             runtimeInfo={runtimeInfo}
             driveUser={driveUser}
             driveAccessToken={driveAccessToken}
@@ -852,6 +926,7 @@ export default function App() {
             onRetryDriveSync={handleRetryDriveSync}
             onConfigureOpenAccess={handleConfigureOpenAccess}
             onRefreshDriveFiles={handleRefreshDriveFiles}
+            onSaveDriveWebhook={handleSaveDriveWebhook}
             onOpenPrintablePasswords={() => setPrintablePasswordsOpen(true)}
             onSeedDemo={handleSeedDemo}
             onResetAll={handleResetAll}

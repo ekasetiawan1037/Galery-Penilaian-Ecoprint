@@ -23,10 +23,10 @@ const WinnerCard: React.FC<{ row: ArtworkScoreRow; position: 1 | 2 }> = ({
     ? `https://drive.google.com/thumbnail?id=${row.artwork.driveFileId}&sz=w1000`
     : null;
   const displayPhotoUrl =
-    !localFailed && row.artwork.photoUrl
-      ? row.artwork.photoUrl
-      : !driveFailed && driveThumbUrl
-        ? driveThumbUrl
+    !driveFailed && driveThumbUrl
+      ? driveThumbUrl
+      : !localFailed && row.artwork.photoUrl
+        ? row.artwork.photoUrl
         : null;
   const hasPhoto = Boolean(displayPhotoUrl);
 
@@ -39,10 +39,10 @@ const WinnerCard: React.FC<{ row: ArtworkScoreRow; position: 1 | 2 }> = ({
             alt={`Karya juara ${row.artwork.artworkTitle}`}
             referrerPolicy="no-referrer"
             onError={() => {
-              if (!localFailed && row.artwork.photoUrl) {
-                setLocalFailed(true);
-              } else {
+              if (!driveFailed && driveThumbUrl && displayPhotoUrl === driveThumbUrl) {
                 setDriveFailed(true);
+              } else {
+                setLocalFailed(true);
               }
             }}
             className="w-full h-full object-cover"

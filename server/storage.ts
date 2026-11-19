@@ -6,6 +6,7 @@ import {
   type ArtworkMetadataOverride,
   type AssessmentSubmission,
   type DriveArchiveConfig,
+  type PhotoKind,
 } from '../src/shared/ecoprint.ts';
 
 export interface PersistedDatabase {
@@ -117,8 +118,71 @@ export function defaultDriveConfig(): DriveArchiveConfig {
     classFolderIds: {},
     manifestFileId: null,
     csvFileId: null,
+    driveWebhookUrl: null,
     lastSyncedAt: null,
   };
+}
+
+export interface ActiveDriveSession {
+  accessToken: string;
+  ownerEmail: string | null;
+  expiresAt: number;
+}
+
+const DRIVE_SESSION_TTL_MS = 50 * 60 * 1000; // 50 minutes
+const DRIVE_SESSION_REDIS_KEY = 'ecoprint:drive_session';
+let memoryDriveSession: ActiveDriveSession | null = null;
+
+export async function setActiveDriveSession(
+  accessToken: string,
+  ownerEmail: string | null = null,
+): Promise<void> {
+  const session: ActiveDriveSession = {
+    accessToken,
+    ownerEmail,
+    expiresAt: Date.now() + DRIVE_SESSION_TTL_MS,
+  };
+  memoryDriveSession = session;
+  if (getRedisConfig()) {
+    await redisCommand([
+      'SET',
+      DRIVE_SESSION_REDIS_KEY,
+      JSON.stringify(session),
+      'EX',
+      Math.floor(DRIVE_SESSION_TTL_MS / 1000),
+    ]).catch(() => {});
+  }
+}
+
+export async function getActiveDriveSession(): Promise<ActiveDriveSession | null> {
+  if (memoryDriveSession && memoryDriveSession.expiresAt > Date.now() + 15_000) {
+    return memoryDriveSession;
+  }
+  memoryDriveSession = null;
+
+  if (getRedisConfig()) {
+    try {
+      const raw = await redisCommand<string>(['GET', DRIVE_SESSION_REDIS_KEY]);
+      if (raw) {
+        const parsed = JSON.parse(raw) as ActiveDriveSession;
+        if (parsed.accessToken && parsed.expiresAt > Date.now() + 15_000) {
+          memoryDriveSession = parsed;
+          return parsed;
+        }
+      }
+    } catch {
+      // Ignore transient Redis read error
+    }
+  }
+
+  return null;
+}
+
+export async function clearActiveDriveSession(): Promise<void> {
+  memoryDriveSession = null;
+  if (getRedisConfig()) {
+    await redisCommand(['DEL', DRIVE_SESSION_REDIS_KEY]).catch(() => {});
+  }
 }
 
 function ensureDirectories(): void {
@@ -333,20 +397,30 @@ const EXT_TO_MIME: Record<string, string> = {
   bmp: 'image/bmp',
 };
 
+function diskBaseName(groupId: string, kind: PhotoKind): string {
+  return kind === 'group' ? `${groupId}_kelompok` : groupId;
+}
+
+function redisFileKey(groupId: string, kind: PhotoKind): string {
+  return kind === 'group' ? `ecoprint:groupfile:${groupId}` : `ecoprint:file:${groupId}`;
+}
+
 export async function saveUploadedFile(
   groupId: string,
   ext: string,
   mimeType: string,
   buffer: Buffer,
+  kind: PhotoKind = 'artwork',
 ): Promise<void> {
   ensureDirectories();
+  const baseName = diskBaseName(groupId, kind);
   for (const oldExt of IMAGE_EXTENSIONS) {
-    const oldPath = path.join(UPLOADS_DIR, `${groupId}.${oldExt}`);
+    const oldPath = path.join(UPLOADS_DIR, `${baseName}.${oldExt}`);
     if (fs.existsSync(oldPath)) {
       fs.unlinkSync(oldPath);
     }
   }
-  const filePath = path.join(UPLOADS_DIR, `${groupId}.${ext}`);
+  const filePath = path.join(UPLOADS_DIR, `${baseName}.${ext}`);
   fs.writeFileSync(filePath, buffer);
 
   if (getRedisConfig()) {
@@ -355,18 +429,22 @@ export async function saveUploadedFile(
       mimeType,
       base64: buffer.toString('base64'),
     });
-    await redisCommand(['SET', `ecoprint:file:${groupId}`, payload]);
+    await redisCommand(['SET', redisFileKey(groupId, kind), payload]);
   }
 }
 
-export async function readUploadedFile(groupId: string): Promise<{
+export async function readUploadedFile(
+  groupId: string,
+  kind: PhotoKind = 'artwork',
+): Promise<{
   buffer: Buffer;
   mimeType: string;
   ext: string;
 } | null> {
   ensureDirectories();
+  const baseName = diskBaseName(groupId, kind);
   for (const ext of IMAGE_EXTENSIONS) {
-    const filePath = path.join(UPLOADS_DIR, `${groupId}.${ext}`);
+    const filePath = path.join(UPLOADS_DIR, `${baseName}.${ext}`);
     if (fs.existsSync(filePath)) {
       return {
         buffer: fs.readFileSync(filePath),
@@ -378,7 +456,7 @@ export async function readUploadedFile(groupId: string): Promise<{
 
   if (getRedisConfig()) {
     try {
-      const raw = await redisCommand<string>(['GET', `ecoprint:file:${groupId}`]);
+      const raw = await redisCommand<string>(['GET', redisFileKey(groupId, kind)]);
       if (raw) {
         const parsed = JSON.parse(raw) as {
           ext: string;
@@ -387,7 +465,7 @@ export async function readUploadedFile(groupId: string): Promise<{
         };
         const buffer = Buffer.from(parsed.base64, 'base64');
         // Cache to local /tmp for subsequent fast reads on warm container
-        fs.writeFileSync(path.join(UPLOADS_DIR, `${groupId}.${parsed.ext}`), buffer);
+        fs.writeFileSync(path.join(UPLOADS_DIR, `${baseName}.${parsed.ext}`), buffer);
         return {
           buffer,
           mimeType: parsed.mimeType || EXT_TO_MIME[parsed.ext] || 'image/jpeg',
@@ -402,16 +480,23 @@ export async function readUploadedFile(groupId: string): Promise<{
   return null;
 }
 
-export async function deleteUploadedFile(groupId: string): Promise<void> {
+export async function deleteUploadedFile(
+  groupId: string,
+  kind: PhotoKind | 'all' = 'artwork',
+): Promise<void> {
   ensureDirectories();
-  for (const ext of IMAGE_EXTENSIONS) {
-    const filePath = path.join(UPLOADS_DIR, `${groupId}.${ext}`);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+  const targets: PhotoKind[] = kind === 'all' ? ['artwork', 'group'] : [kind];
+  for (const targetKind of targets) {
+    const baseName = diskBaseName(groupId, targetKind);
+    for (const ext of IMAGE_EXTENSIONS) {
+      const filePath = path.join(UPLOADS_DIR, `${baseName}.${ext}`);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
     }
-  }
-  if (getRedisConfig()) {
-    await redisCommand(['DEL', `ecoprint:file:${groupId}`]).catch(() => {});
+    if (getRedisConfig()) {
+      await redisCommand(['DEL', redisFileKey(groupId, targetKind)]).catch(() => {});
+    }
   }
 }
 

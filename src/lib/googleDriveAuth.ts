@@ -167,12 +167,15 @@ export function buildCatalogCsv(
     'Teknik',
     'Media Kain',
     'Mordant',
-    'Nama File Asli',
-    'Ukuran File (Byte)',
+    'Nama File Karya Asli',
+    'Ukuran Karya (Byte)',
+    'Nama File Foto Kelompok',
+    'Ukuran Foto Kelompok (Byte)',
     'Total Poin',
     'Jumlah Penilai',
     'Peringkat Jenjang',
-    'Link Google Drive',
+    'Link Drive Foto Karya',
+    'Link Drive Foto Kelompok',
   ].join(',');
 
   const lines = catalog.map((art) => {
@@ -189,10 +192,13 @@ export function buildCatalogCsv(
       art.mordant,
       art.originalFileName ?? '',
       art.originalFileSize ?? '',
+      art.groupOriginalFileName ?? '',
+      art.groupOriginalFileSize ?? '',
       score?.totalPoints ?? 0,
       score?.votesCount ?? 0,
       score?.gradeRank ?? '',
       art.driveWebViewLink ?? '',
+      art.groupDriveWebViewLink ?? '',
     ]
       .map(escapeCsv)
       .join(',');

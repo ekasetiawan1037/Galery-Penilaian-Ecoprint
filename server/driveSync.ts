@@ -2,6 +2,7 @@ import {
   type ArtworkGroup,
   type DriveArchiveConfig,
   type DriveOpenAccessStatus,
+  type PhotoKind,
   type RecapitulationSummary,
 } from '../src/shared/ecoprint.ts';
 
@@ -394,17 +395,20 @@ export async function uploadBinaryFileToDrive(
   fileBuffer: Buffer,
   originalFileName: string,
   mimeType: string,
+  kind: PhotoKind = 'artwork',
 ): Promise<DriveFileSummary> {
   const base = getDriveApiBase();
   const safeTitle = group.artworkTitle.replace(/[^a-zA-Z0-9-_ ]/g, '').trim() || 'Karya';
-  const driveName = `${group.groupId}_Kls${group.className}_${safeTitle}_${originalFileName}`;
+  const kindTag = kind === 'group' ? 'KELOMPOK' : 'KARYA';
+  const kindDesc = kind === 'group' ? 'Foto Kelompok Bersama Karya' : 'Foto Karya Ecoprint';
+  const driveName = `${group.groupId}_Kls${group.className}_${kindTag}_${safeTitle}_${originalFileName}`;
   const memberInfo = group.memberNames ? ` | Anggota: ${group.memberNames}` : '';
 
   const metadata = {
     name: driveName,
     parents: [targetFolderId],
     mimeType,
-    description: `Kelompok: ${group.groupId} | Kelas: ${group.className}${memberInfo} | Judul: ${group.artworkTitle} | Daun: ${group.leaves} | Teknik: ${group.technique}`,
+    description: `[${kindDesc}] Kelompok: ${group.groupId} | Kelas: ${group.className}${memberInfo} | Judul: ${group.artworkTitle} | Daun: ${group.leaves} | Teknik: ${group.technique}`,
   };
 
   const initRes = await fetch(
@@ -495,12 +499,15 @@ function buildCsvContent(
     'Teknik',
     'Media Kain',
     'Mordant',
-    'Nama File Asli',
-    'Ukuran File (Byte)',
+    'Nama File Karya Asli',
+    'Ukuran Karya (Byte)',
+    'Nama File Foto Kelompok',
+    'Ukuran Foto Kelompok (Byte)',
     'Total Poin',
     'Jumlah Penilai',
     'Peringkat Jenjang',
-    'Link Google Drive',
+    'Link Drive Foto Karya',
+    'Link Drive Foto Kelompok',
   ].join(',');
 
   const lines = catalog.map((art) => {
@@ -517,10 +524,13 @@ function buildCsvContent(
       art.mordant,
       art.originalFileName ?? '',
       art.originalFileSize ?? '',
+      art.groupOriginalFileName ?? '',
+      art.groupOriginalFileSize ?? '',
       score?.totalPoints ?? 0,
       score?.votesCount ?? 0,
       score?.gradeRank ?? '',
       art.driveWebViewLink ?? '',
+      art.groupDriveWebViewLink ?? '',
     ]
       .map(escapeCsv)
       .join(',');
@@ -661,19 +671,192 @@ export async function deleteDriveFile(
   }
 }
 
+export async function syncSingleGroupToDrive(params: {
+  accessToken: string;
+  ownerEmail?: string | null;
+  driveConfig: DriveArchiveConfig;
+  group: ArtworkGroup;
+  artworkFile?: { buffer: Buffer; originalFileName: string; mimeType: string } | null;
+  groupFile?: { buffer: Buffer; originalFileName: string; mimeType: string } | null;
+}): Promise<{
+  driveConfig: DriveArchiveConfig;
+  artworkResult?: {
+    driveFileId: string;
+    driveWebViewLink: string;
+    driveSyncedAt: string;
+  };
+  groupResult?: {
+    driveFileId: string;
+    driveWebViewLink: string;
+    driveSyncedAt: string;
+  };
+}> {
+  const { accessToken, ownerEmail, driveConfig, group, artworkFile, groupFile } = params;
+
+  const rootFolder = await ensureRootFolder(
+    accessToken,
+    driveConfig.driveFolderId,
+    true,
+  );
+  const classFolderIds: Record<string, string> = {
+    ...(driveConfig.classFolderIds ?? {}),
+  };
+  const classFolderId = await ensureClassSubfolder(
+    accessToken,
+    rootFolder.id,
+    group.className,
+    classFolderIds[group.className],
+    true,
+  );
+  classFolderIds[group.className] = classFolderId;
+
+  let artworkResult:
+    | { driveFileId: string; driveWebViewLink: string; driveSyncedAt: string }
+    | undefined;
+  let groupResult:
+    | { driveFileId: string; driveWebViewLink: string; driveSyncedAt: string }
+    | undefined;
+
+  if (artworkFile) {
+    const uploaded = await uploadBinaryFileToDrive(
+      accessToken,
+      classFolderId,
+      group,
+      artworkFile.buffer,
+      artworkFile.originalFileName,
+      artworkFile.mimeType,
+      'artwork',
+    );
+    artworkResult = {
+      driveFileId: uploaded.id,
+      driveWebViewLink: uploaded.webViewLink,
+      driveSyncedAt: new Date().toISOString(),
+    };
+  }
+
+  if (groupFile) {
+    const uploaded = await uploadBinaryFileToDrive(
+      accessToken,
+      classFolderId,
+      group,
+      groupFile.buffer,
+      groupFile.originalFileName,
+      groupFile.mimeType,
+      'group',
+    );
+    groupResult = {
+      driveFileId: uploaded.id,
+      driveWebViewLink: uploaded.webViewLink,
+      driveSyncedAt: new Date().toISOString(),
+    };
+  }
+
+  return {
+    driveConfig: {
+      ...driveConfig,
+      driveFolderId: rootFolder.id,
+      driveFolderUrl: rootFolder.webViewLink,
+      driveOwnerEmail: ownerEmail ?? driveConfig.driveOwnerEmail,
+      driveOpenAccessStatus: rootFolder.openAccessStatus,
+      classFolderIds,
+      lastSyncedAt: new Date().toISOString(),
+    },
+    artworkResult,
+    groupResult,
+  };
+}
+
+export async function uploadViaAppsScriptWebhook(
+  webhookUrl: string,
+  params: {
+    group: ArtworkGroup;
+    kind: PhotoKind;
+    buffer: Buffer;
+    originalFileName: string;
+    mimeType: string;
+  },
+): Promise<{
+  driveFileId: string;
+  driveWebViewLink: string;
+  driveSyncedAt: string;
+  driveFolderId?: string;
+  driveFolderUrl?: string;
+  driveOwnerEmail?: string;
+}> {
+  const { group, kind, buffer, originalFileName, mimeType } = params;
+  const safeTitle = group.artworkTitle.replace(/[^a-zA-Z0-9-_ ]/g, '').trim() || 'Karya';
+  const kindTag = kind === 'group' ? 'KELOMPOK' : 'KARYA';
+  const driveName = `${group.groupId}_Kls${group.className}_${kindTag}_${safeTitle}_${originalFileName}`;
+
+  const res = await fetch(webhookUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    redirect: 'follow',
+    body: JSON.stringify({
+      folderName: TARGET_FOLDER_NAME,
+      classFolderName: `Kelas ${group.className}`,
+      groupId: group.groupId,
+      className: group.className,
+      kind,
+      fileName: driveName,
+      mimeType,
+      base64: buffer.toString('base64'),
+      memberNames: group.memberNames,
+      artworkTitle: group.artworkTitle,
+      leaves: group.leaves,
+      technique: group.technique,
+    }),
+  });
+
+  if (!res.ok) {
+    throw new ServerDriveApiError(
+      `Apps Script bridge mengembalikan status HTTP ${res.status}.`,
+      res.status,
+    );
+  }
+
+  const data = (await res.json()) as {
+    ok?: boolean;
+    fileId?: string;
+    webViewLink?: string;
+    folderId?: string;
+    folderUrl?: string;
+    ownerEmail?: string;
+    error?: string;
+  };
+
+  if (!data.ok || !data.fileId) {
+    throw new Error(data.error || 'Apps Script tidak mengembalikan ID file Drive.');
+  }
+
+  return {
+    driveFileId: data.fileId,
+    driveWebViewLink:
+      data.webViewLink || `https://drive.google.com/file/d/${data.fileId}/view`,
+    driveSyncedAt: new Date().toISOString(),
+    driveFolderId: data.folderId,
+    driveFolderUrl: data.folderUrl,
+    driveOwnerEmail: data.ownerEmail,
+  };
+}
+
 export async function runFullDriveSync(params: {
   accessToken: string;
   ownerEmail?: string | null;
   driveConfig: DriveArchiveConfig;
   catalog: ArtworkGroup[];
   recapitulation: RecapitulationSummary;
-  readUploadedFileBuffer: (groupId: string) => Promise<{ buffer: Buffer; mimeType: string } | null>;
+  readUploadedFileBuffer: (
+    groupId: string,
+    kind: PhotoKind,
+  ) => Promise<{ buffer: Buffer; mimeType: string } | null>;
   applyOpenAccess?: boolean;
   forceArchiveDocs?: boolean;
 }): Promise<{
   driveConfig: DriveArchiveConfig;
   syncedItems: Array<{
     groupId: string;
+    kind: PhotoKind;
     driveFileId: string;
     driveWebViewLink: string;
     driveSyncedAt: string;
@@ -702,12 +885,9 @@ export async function runFullDriveSync(params: {
     ...(driveConfig.classFolderIds ?? {}),
   };
 
-  const pendingGroups = catalog.filter(
-    (art) => Boolean(art.photoUrl) && !art.driveFileId,
-  );
-
   const syncedItems: Array<{
     groupId: string;
+    kind: PhotoKind;
     driveFileId: string;
     driveWebViewLink: string;
     driveSyncedAt: string;
@@ -715,45 +895,88 @@ export async function runFullDriveSync(params: {
 
   const updatedCatalog = [...catalog];
 
-  for (const art of pendingGroups) {
-    const fileData = await readUploadedFileBuffer(art.groupId);
-    if (!fileData) continue;
+  for (let i = 0; i < updatedCatalog.length; i++) {
+    let art = updatedCatalog[i];
+    const needsArtwork = Boolean(art.photoUrl) && !art.driveFileId;
+    const needsGroup = Boolean(art.groupPhotoUrl) && !art.groupDriveFileId;
+    if (!needsArtwork && !needsGroup) continue;
 
-    const classFolderId = await ensureClassSubfolder(
-      accessToken,
-      rootFolder.id,
-      art.className,
-      classFolderIds[art.className],
-      applyOpenAccess,
-    );
-    classFolderIds[art.className] = classFolderId;
+    let classFolderId = classFolderIds[art.className];
+    const ensureClassDir = async () => {
+      if (!classFolderId) {
+        classFolderId = await ensureClassSubfolder(
+          accessToken,
+          rootFolder.id,
+          art.className,
+          classFolderIds[art.className],
+          applyOpenAccess,
+        );
+        classFolderIds[art.className] = classFolderId;
+      }
+      return classFolderId;
+    };
 
-    const uploaded = await uploadBinaryFileToDrive(
-      accessToken,
-      classFolderId,
-      art,
-      fileData.buffer,
-      art.originalFileName || `${art.groupId}.jpg`,
-      art.originalMimeType || fileData.mimeType,
-    );
-
-    const syncedAt = new Date().toISOString();
-    syncedItems.push({
-      groupId: art.groupId,
-      driveFileId: uploaded.id,
-      driveWebViewLink: uploaded.webViewLink,
-      driveSyncedAt: syncedAt,
-    });
-
-    const idx = updatedCatalog.findIndex((c) => c.groupId === art.groupId);
-    if (idx >= 0) {
-      updatedCatalog[idx] = {
-        ...updatedCatalog[idx],
-        driveFileId: uploaded.id,
-        driveWebViewLink: uploaded.webViewLink,
-        driveSyncedAt: syncedAt,
-      };
+    if (needsArtwork) {
+      const fileData = await readUploadedFileBuffer(art.groupId, 'artwork');
+      if (fileData) {
+        const folderId = await ensureClassDir();
+        const uploaded = await uploadBinaryFileToDrive(
+          accessToken,
+          folderId,
+          art,
+          fileData.buffer,
+          art.originalFileName || `${art.groupId}.jpg`,
+          art.originalMimeType || fileData.mimeType,
+          'artwork',
+        );
+        const syncedAt = new Date().toISOString();
+        syncedItems.push({
+          groupId: art.groupId,
+          kind: 'artwork',
+          driveFileId: uploaded.id,
+          driveWebViewLink: uploaded.webViewLink,
+          driveSyncedAt: syncedAt,
+        });
+        art = {
+          ...art,
+          driveFileId: uploaded.id,
+          driveWebViewLink: uploaded.webViewLink,
+          driveSyncedAt: syncedAt,
+        };
+      }
     }
+
+    if (needsGroup) {
+      const groupData = await readUploadedFileBuffer(art.groupId, 'group');
+      if (groupData) {
+        const folderId = await ensureClassDir();
+        const uploaded = await uploadBinaryFileToDrive(
+          accessToken,
+          folderId,
+          art,
+          groupData.buffer,
+          art.groupOriginalFileName || `${art.groupId}_kelompok.jpg`,
+          art.groupOriginalMimeType || groupData.mimeType,
+          'group',
+        );
+        const syncedAt = new Date().toISOString();
+        syncedItems.push({
+          groupId: art.groupId,
+          kind: 'group',
+          driveFileId: uploaded.id,
+          driveWebViewLink: uploaded.webViewLink,
+          driveSyncedAt: syncedAt,
+        });
+        art = {
+          ...art,
+          groupDriveFileId: uploaded.id,
+          groupDriveWebViewLink: uploaded.webViewLink,
+          groupDriveSyncedAt: syncedAt,
+        };
+      }
+    }
+
+    updatedCatalog[i] = art;
   }
 
   let manifestFileId = driveConfig.manifestFileId;
@@ -780,6 +1003,10 @@ export async function runFullDriveSync(params: {
         originalFileSize: a.originalFileSize,
         driveFileId: a.driveFileId,
         driveWebViewLink: a.driveWebViewLink,
+        groupOriginalFileName: a.groupOriginalFileName,
+        groupOriginalFileSize: a.groupOriginalFileSize,
+        groupDriveFileId: a.groupDriveFileId,
+        groupDriveWebViewLink: a.groupDriveWebViewLink,
       })),
     };
 
@@ -813,6 +1040,7 @@ export async function runFullDriveSync(params: {
 
   return {
     driveConfig: {
+      ...driveConfig,
       driveFolderId: rootFolder.id,
       driveFolderUrl: rootFolder.webViewLink,
       driveOwnerEmail: ownerEmail ?? driveConfig.driveOwnerEmail,

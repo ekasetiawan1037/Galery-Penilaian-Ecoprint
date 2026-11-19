@@ -1,5 +1,16 @@
 import React, { useState } from 'react';
-import { ImageOff, KeyRound, Lock, Pencil, Star, Upload, X } from 'lucide-react';
+import {
+  Download,
+  ExternalLink,
+  ImageOff,
+  KeyRound,
+  Lock,
+  Pencil,
+  Star,
+  Upload,
+  Users,
+  X,
+} from 'lucide-react';
 import {
   RANK_CONFIG,
   canAssessArtwork,
@@ -32,11 +43,21 @@ export const ArtworkDetailModal: React.FC<ArtworkDetailModalProps> = ({
 }) => {
   const [localFailed, setLocalFailed] = useState(false);
   const [driveFailed, setDriveFailed] = useState(false);
+  const [groupLocalFailed, setGroupLocalFailed] = useState(false);
+  const [groupDriveFailed, setGroupDriveFailed] = useState(false);
 
   React.useEffect(() => {
     setLocalFailed(false);
     setDriveFailed(false);
-  }, [artwork?.groupId, artwork?.photoUrl, artwork?.driveFileId]);
+    setGroupLocalFailed(false);
+    setGroupDriveFailed(false);
+  }, [
+    artwork?.groupId,
+    artwork?.photoUrl,
+    artwork?.driveFileId,
+    artwork?.groupPhotoUrl,
+    artwork?.groupDriveFileId,
+  ]);
 
   if (!artwork) return null;
 
@@ -44,16 +65,28 @@ export const ArtworkDetailModal: React.FC<ArtworkDetailModalProps> = ({
   const isOwnClass = evaluatorGroup
     ? !canAssessArtwork(evaluatorGroup.className, artwork.className)
     : false;
+
   const driveThumbUrl = artwork.driveFileId
     ? `https://drive.google.com/thumbnail?id=${artwork.driveFileId}&sz=w1200`
     : null;
   const displayPhotoUrl =
-    !localFailed && artwork.photoUrl
-      ? artwork.photoUrl
-      : !driveFailed && driveThumbUrl
-        ? driveThumbUrl
+    !driveFailed && driveThumbUrl
+      ? driveThumbUrl
+      : !localFailed && artwork.photoUrl
+        ? artwork.photoUrl
         : null;
   const hasPhoto = Boolean(displayPhotoUrl);
+
+  const groupDriveThumbUrl = artwork.groupDriveFileId
+    ? `https://drive.google.com/thumbnail?id=${artwork.groupDriveFileId}&sz=w1200`
+    : null;
+  const displayGroupPhotoUrl =
+    !groupDriveFailed && groupDriveThumbUrl
+      ? groupDriveThumbUrl
+      : !groupLocalFailed && artwork.groupPhotoUrl
+        ? artwork.groupPhotoUrl
+        : null;
+  const hasGroupPhoto = Boolean(displayGroupPhotoUrl);
 
   return (
     <div
@@ -62,43 +95,153 @@ export const ArtworkDetailModal: React.FC<ArtworkDetailModalProps> = ({
       aria-modal="true"
       aria-labelledby="artwork-detail-title"
     >
-      <div className="bg-white border border-[#E3DED4] rounded-xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col md:flex-row shadow-xl">
-        <div className="md:w-1/2 bg-[#EFECE5] relative min-h-[260px] flex items-center justify-center">
-          {hasPhoto ? (
-            <img
-              src={displayPhotoUrl!}
-              alt={`Detail karya ecoprint ${artwork.artworkTitle}`}
-              referrerPolicy="no-referrer"
-              onError={() => {
-                if (!localFailed && artwork.photoUrl) {
-                  setLocalFailed(true);
-                } else {
-                  setDriveFailed(true);
-                }
-              }}
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center">
-              <ImageOff className="w-10 h-10 text-[#9C9588] mb-2" aria-hidden="true" />
-              <p className="text-sm font-medium text-[#5E5A52]">
-                Foto karya belum diupload oleh Kelompok {artwork.groupId}
-              </p>
-              {isOwnGroup && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    onClose();
-                    onOpenUploadMyPhoto();
+      <div className="bg-white border border-[#E3DED4] rounded-xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col md:flex-row shadow-xl">
+        {/* Left column: BOTH Foto Karya Ecoprint & Foto Kelompok Bersama Karya */}
+        <div className="md:w-1/2 bg-[#F5F2EC] p-4 space-y-4 overflow-y-auto border-b md:border-b-0 md:border-r border-[#E3DED4]">
+          {/* Foto 1: Foto Karya */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-semibold text-[#1A1917]">
+                1. Foto Karya Ecoprint
+              </span>
+              <div className="flex items-center gap-2.5">
+                {artwork.photoUrl && (
+                  <a
+                    href={`/api/artworks/${encodeURIComponent(artwork.groupId)}/download-original?kind=artwork`}
+                    download={artwork.originalFileName ?? `${artwork.groupId}.jpg`}
+                    className="inline-flex items-center gap-1 text-[11px] font-medium text-[#1B4332] hover:underline"
+                  >
+                    <Download className="w-3 h-3" aria-hidden="true" />
+                    <span>Asli</span>
+                  </a>
+                )}
+                {artwork.driveWebViewLink && (
+                  <a
+                    href={artwork.driveWebViewLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] font-medium text-[#1B4332] hover:underline"
+                  >
+                    <span>Drive</span>
+                    <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                  </a>
+                )}
+              </div>
+            </div>
+
+            <div className="aspect-[4/3] rounded-lg bg-[#EFECE5] border border-[#E3DED4] overflow-hidden flex items-center justify-center">
+              {hasPhoto ? (
+                <img
+                  src={displayPhotoUrl!}
+                  alt={`Detail karya ecoprint ${artwork.artworkTitle}`}
+                  referrerPolicy="no-referrer"
+                  onError={() => {
+                    if (!driveFailed && driveThumbUrl && displayPhotoUrl === driveThumbUrl) {
+                      setDriveFailed(true);
+                    } else {
+                      setLocalFailed(true);
+                    }
                   }}
-                  className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#1B4332] text-white text-xs font-semibold hover:bg-[#143326]"
-                >
-                  <Upload className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>Upload Foto Sekarang</span>
-                </button>
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center">
+                  <ImageOff className="w-8 h-8 text-[#9C9588] mb-2" aria-hidden="true" />
+                  <p className="text-xs font-medium text-[#5E5A52]">
+                    Foto karya belum diupload oleh Kelompok {artwork.groupId}
+                  </p>
+                  {isOwnGroup && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        onOpenUploadMyPhoto();
+                      }}
+                      className="mt-3 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#1B4332] text-white text-xs font-semibold hover:bg-[#143326]"
+                    >
+                      <Upload className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>Upload 2 Foto Sekarang</span>
+                    </button>
+                  )}
+                </div>
               )}
             </div>
-          )}
+          </div>
+
+          {/* Foto 2: Foto Kelompok Bersama Karya */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-xs">
+              <span className="inline-flex items-center gap-1.5 font-semibold text-[#1A1917]">
+                <Users className="w-3.5 h-3.5 text-[#1B4332]" aria-hidden="true" />
+                <span>2. Foto Kelompok Bersama Karya</span>
+              </span>
+              <div className="flex items-center gap-2.5">
+                {artwork.groupPhotoUrl && (
+                  <a
+                    href={`/api/artworks/${encodeURIComponent(artwork.groupId)}/download-original?kind=group`}
+                    download={artwork.groupOriginalFileName ?? `${artwork.groupId}_kelompok.jpg`}
+                    className="inline-flex items-center gap-1 text-[11px] font-medium text-[#1B4332] hover:underline"
+                  >
+                    <Download className="w-3 h-3" aria-hidden="true" />
+                    <span>Asli</span>
+                  </a>
+                )}
+                {artwork.groupDriveWebViewLink && (
+                  <a
+                    href={artwork.groupDriveWebViewLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] font-medium text-[#1B4332] hover:underline"
+                  >
+                    <span>Drive</span>
+                    <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                  </a>
+                )}
+              </div>
+            </div>
+
+            <div className="aspect-[4/3] rounded-lg bg-[#EFECE5] border border-[#E3DED4] overflow-hidden flex items-center justify-center">
+              {hasGroupPhoto ? (
+                <img
+                  src={displayGroupPhotoUrl!}
+                  alt={`Foto kelompok ${artwork.groupId} bersama karya ${artwork.artworkTitle}`}
+                  referrerPolicy="no-referrer"
+                  onError={() => {
+                    if (
+                      !groupDriveFailed &&
+                      groupDriveThumbUrl &&
+                      displayGroupPhotoUrl === groupDriveThumbUrl
+                    ) {
+                      setGroupDriveFailed(true);
+                    } else {
+                      setGroupLocalFailed(true);
+                    }
+                  }}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center">
+                  <Users className="w-8 h-8 text-[#9C9588] mb-2" aria-hidden="true" />
+                  <p className="text-xs font-medium text-[#5E5A52]">
+                    Foto kelompok bersama karya belum diupload
+                  </p>
+                  {isOwnGroup && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        onOpenUploadMyPhoto();
+                      }}
+                      className="mt-3 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-[#1B4332] bg-white text-[#1B4332] text-xs font-semibold hover:bg-[#F2F7F4]"
+                    >
+                      <Upload className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>Upload Foto Kelompok</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="md:w-1/2 p-6 flex flex-col justify-between overflow-y-auto">

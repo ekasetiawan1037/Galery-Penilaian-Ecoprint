@@ -5,6 +5,7 @@ import {
   type AssessmentSubmission,
   type DriveArchiveConfig,
   type GroupPasswordItem,
+  type PhotoKind,
   type RankedVoteInput,
   buildCatalogWithOverrides,
   buildLockedSubmission,
@@ -20,18 +21,23 @@ import {
   listDriveFolderFilesRecursive,
   runFullDriveSync,
   ServerDriveApiError,
+  syncSingleGroupToDrive,
+  uploadViaAppsScriptWebhook,
 } from './driveSync.ts';
 import {
   type PersistedDatabase,
   assembleUploadChunks,
+  clearActiveDriveSession,
   deleteUploadedFile,
   generateRandomGroupPasswords,
+  getActiveDriveSession,
   getStorageStatus,
   loadDatabase,
   readUploadedFile,
   saveDatabase,
   saveUploadChunk,
   saveUploadedFile,
+  setActiveDriveSession,
 } from './storage.ts';
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'SMPBHATUR0707';
@@ -83,13 +89,15 @@ function extractToken(req: express.Request): string | undefined {
   return undefined;
 }
 
-function buildApiState(db: PersistedDatabase) {
+async function buildApiState(db: PersistedDatabase) {
   const catalog = buildCatalogWithOverrides(db.artworksMeta);
+  const driveSession = await getActiveDriveSession();
   return {
     catalog,
     submissions: db.submissions,
     recapitulation: computeRecapitulation(db.submissions, catalog),
     driveConfig: db.driveConfig,
+    driveBridgeConnected: Boolean(driveSession || db.driveConfig.driveWebhookUrl),
     revision: db.revision ?? 0,
     updatedAt: db.updatedAt,
     runtimeInfo: getStorageStatus(),
@@ -150,7 +158,7 @@ export function createApiApp(): express.Express {
 
   app.get('/api/state', async (_req, res) => {
     const db = await loadDatabase();
-    res.json(buildApiState(db));
+    res.json(await buildApiState(db));
   });
 
   app.post('/api/auth/login', async (req, res) => {
@@ -269,7 +277,86 @@ export function createApiApp(): express.Express {
     }
   });
 
-  // Upload original-size artwork photo and/or edit memberNames, artworkTitle & leaves for the authenticated group
+  async function resolveIncomingImageBuffer(params: {
+    groupId: string;
+    imageDataUrl?: string;
+    uploadId?: string;
+    totalChunks?: number;
+    originalFileName?: string;
+    originalMimeType?: string;
+    defaultFileName: string;
+  }): Promise<{
+    buffer: Buffer;
+    ext: string;
+    mimeType: string;
+    fileName: string;
+  }> {
+    const {
+      groupId,
+      imageDataUrl,
+      uploadId,
+      totalChunks,
+      originalFileName,
+      originalMimeType,
+      defaultFileName,
+    } = params;
+
+    let buffer: Buffer;
+    let detectedMime: string;
+    let ext: string;
+
+    if (uploadId && typeof totalChunks === 'number' && totalChunks > 0) {
+      const candidateMime = (originalMimeType || 'image/jpeg').toLowerCase();
+      const isAllowedImage =
+        candidateMime.startsWith('image/') ||
+        (candidateMime === 'application/octet-stream' &&
+          /\.(jpg|jpeg|png|webp|heic|heif|avif|gif|bmp)$/i.test(originalFileName || ''));
+      if (!isAllowedImage) {
+        throw new Error(
+          'Format file bukan gambar yang didukung. Gunakan JPG, PNG, WebP, atau HEIC.',
+        );
+      }
+      ext = mimeTypeToExtension(candidateMime, originalFileName);
+      detectedMime = candidateMime.startsWith('image/')
+        ? candidateMime
+        : MIME_BY_EXT[ext] ?? 'image/jpeg';
+      buffer = await assembleUploadChunks(groupId, uploadId, totalChunks);
+    } else {
+      const match = (imageDataUrl || '').match(/^data:([^,]*);base64,([A-Za-z0-9+/=\s]+)$/i);
+      if (!match) {
+        throw new Error(
+          'Format gambar tidak valid. Gunakan file gambar JPG, PNG, WebP, atau HEIC.',
+        );
+      }
+      const dataUrlHeader = match[1] || '';
+      const dataUrlMime = (dataUrlHeader.split(';')[0] || '').trim().toLowerCase();
+      const candidateMime = (originalMimeType || dataUrlMime || 'image/jpeg').toLowerCase();
+      const isAllowedImage =
+        candidateMime.startsWith('image/') ||
+        (candidateMime === 'application/octet-stream' &&
+          /\.(jpg|jpeg|png|webp|heic|heif|avif|gif|bmp)$/i.test(originalFileName || ''));
+      if (!isAllowedImage) {
+        throw new Error(
+          'Format file bukan gambar yang didukung. Gunakan JPG, PNG, WebP, atau HEIC.',
+        );
+      }
+      ext = mimeTypeToExtension(candidateMime, originalFileName);
+      detectedMime = candidateMime.startsWith('image/')
+        ? candidateMime
+        : MIME_BY_EXT[ext] ?? 'image/jpeg';
+      buffer = Buffer.from(match[2].replace(/\s+/g, ''), 'base64');
+    }
+
+    if (buffer.byteLength > 25 * 1024 * 1024) {
+      throw new Error('Ukuran file foto melebihi batas 25 MB.');
+    }
+
+    const fileName = originalFileName?.slice(0, 140) || `${defaultFileName}.${ext}`;
+    return { buffer, ext, mimeType: detectedMime, fileName };
+  }
+
+  // Upload original-size artwork photo + group-with-artwork photo and/or edit metadata for the authenticated group.
+  // Writes FIRST to teacher's Google Drive when connected (active Drive session or Apps Script bridge), then saves local/Redis copy.
   app.post('/api/artworks/:groupId/photo', async (req, res) => {
     const { groupId } = req.params;
     const db = await loadDatabase();
@@ -288,6 +375,11 @@ export function createApiApp(): express.Express {
       totalChunks,
       originalFileName,
       originalMimeType,
+      groupImageDataUrl,
+      groupUploadId,
+      groupTotalChunks,
+      groupOriginalFileName,
+      groupOriginalMimeType,
       memberNames,
       artworkTitle,
       technique,
@@ -307,6 +399,11 @@ export function createApiApp(): express.Express {
       totalChunks?: number;
       originalFileName?: string;
       originalMimeType?: string;
+      groupImageDataUrl?: string;
+      groupUploadId?: string;
+      groupTotalChunks?: number;
+      groupOriginalFileName?: string;
+      groupOriginalMimeType?: string;
       memberNames?: string;
       artworkTitle?: string;
       technique?: string;
@@ -322,6 +419,51 @@ export function createApiApp(): express.Express {
       driveOpenAccessStatus?: DriveArchiveConfig['driveOpenAccessStatus'];
     };
 
+    const hasNewArtworkPhoto = Boolean(
+      imageDataUrl || (uploadId && typeof totalChunks === 'number' && totalChunks > 0),
+    );
+    const hasNewGroupPhoto = Boolean(
+      groupImageDataUrl ||
+        (groupUploadId && typeof groupTotalChunks === 'number' && groupTotalChunks > 0),
+    );
+
+    let decodedArtwork:
+      | { buffer: Buffer; ext: string; mimeType: string; fileName: string }
+      | null = null;
+    let decodedGroup:
+      | { buffer: Buffer; ext: string; mimeType: string; fileName: string }
+      | null = null;
+
+    try {
+      if (hasNewArtworkPhoto) {
+        decodedArtwork = await resolveIncomingImageBuffer({
+          groupId,
+          imageDataUrl,
+          uploadId,
+          totalChunks,
+          originalFileName,
+          originalMimeType,
+          defaultFileName: groupId,
+        });
+      }
+      if (hasNewGroupPhoto) {
+        decodedGroup = await resolveIncomingImageBuffer({
+          groupId,
+          imageDataUrl: groupImageDataUrl,
+          uploadId: groupUploadId,
+          totalChunks: groupTotalChunks,
+          originalFileName: groupOriginalFileName,
+          originalMimeType: groupOriginalMimeType,
+          defaultFileName: `${groupId}_kelompok`,
+        });
+      }
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'Gagal memproses file foto.',
+      });
+      return;
+    }
+
     const existingMeta = db.artworksMeta[groupId] ?? {};
     let photoUrl = existingMeta.photoUrl ?? null;
     let photoUpdatedAt = existingMeta.photoUpdatedAt ?? null;
@@ -332,83 +474,197 @@ export function createApiApp(): express.Express {
     let nextDriveWebViewLink = existingMeta.driveWebViewLink ?? null;
     let nextDriveSyncedAt = existingMeta.driveSyncedAt ?? null;
 
-    if (imageDataUrl || (uploadId && typeof totalChunks === 'number' && totalChunks > 0)) {
-      let buffer: Buffer;
-      let detectedMime: string;
-      let ext: string;
+    let groupPhotoUrl = existingMeta.groupPhotoUrl ?? null;
+    let groupPhotoUpdatedAt = existingMeta.groupPhotoUpdatedAt ?? null;
+    let savedGroupOriginalName = existingMeta.groupOriginalFileName ?? null;
+    let savedGroupOriginalSize = existingMeta.groupOriginalFileSize ?? null;
+    let savedGroupOriginalMime = existingMeta.groupOriginalMimeType ?? null;
+    let nextGroupDriveFileId = existingMeta.groupDriveFileId ?? null;
+    let nextGroupDriveWebViewLink = existingMeta.groupDriveWebViewLink ?? null;
+    let nextGroupDriveSyncedAt = existingMeta.groupDriveSyncedAt ?? null;
 
-      if (uploadId && typeof totalChunks === 'number' && totalChunks > 0) {
-        const candidateMime = (originalMimeType || 'image/jpeg').toLowerCase();
-        const isAllowedImage =
-          candidateMime.startsWith('image/') ||
-          (candidateMime === 'application/octet-stream' &&
-            /\.(jpg|jpeg|png|webp|heic|heif|avif|gif|bmp)$/i.test(originalFileName || ''));
-        if (!isAllowedImage) {
-          res.status(400).json({
-            error: 'Format file bukan gambar yang didukung. Gunakan JPG, PNG, WebP, atau HEIC.',
-          });
-          return;
-        }
-        ext = mimeTypeToExtension(candidateMime, originalFileName);
-        detectedMime = candidateMime.startsWith('image/')
-          ? candidateMime
-          : MIME_BY_EXT[ext] ?? 'image/jpeg';
+    const mergedMetaDraft = {
+      ...existingMeta,
+      ...(memberNames !== undefined ? { memberNames: memberNames.slice(0, 160) } : {}),
+      ...(artworkTitle !== undefined ? { artworkTitle: artworkTitle.slice(0, 80) } : {}),
+      ...(technique !== undefined ? { technique: technique.slice(0, 50) } : {}),
+      ...(leaves !== undefined ? { leaves: leaves.slice(0, 120) } : {}),
+      ...(fabric !== undefined ? { fabric: fabric.slice(0, 60) } : {}),
+      ...(mordant !== undefined ? { mordant: mordant.slice(0, 60) } : {}),
+      ...(description !== undefined ? { description: description.slice(0, 260) } : {}),
+    };
+    const groupSnapshot =
+      getGroupById(
+        groupId,
+        buildCatalogWithOverrides({ ...db.artworksMeta, [groupId]: mergedMetaDraft }),
+      ) ?? getGroupById(groupId)!;
+
+    let driveSyncStatus: 'synced' | 'pending' | 'error' | 'none' =
+      decodedArtwork || decodedGroup ? 'pending' : 'none';
+    let driveSyncMessage: string | null = null;
+
+    // 1) WRITE TO TEACHER'S GOOGLE DRIVE FIRST (when Drive bridge/session or webhook is available)
+    if (decodedArtwork || decodedGroup) {
+      const headerDriveToken =
+        typeof req.headers['x-drive-token'] === 'string' &&
+        req.headers['x-drive-token'].trim()
+          ? req.headers['x-drive-token'].trim()
+          : null;
+      const activeDriveSession = await getActiveDriveSession();
+      const driveTokenToUse = headerDriveToken ?? activeDriveSession?.accessToken ?? null;
+
+      let wroteViaOAuth = false;
+
+      if (driveTokenToUse) {
         try {
-          buffer = await assembleUploadChunks(groupId, uploadId, totalChunks);
+          const driveRes = await syncSingleGroupToDrive({
+            accessToken: driveTokenToUse,
+            ownerEmail: activeDriveSession?.ownerEmail ?? db.driveConfig.driveOwnerEmail,
+            driveConfig: db.driveConfig,
+            group: groupSnapshot,
+            artworkFile: decodedArtwork
+              ? {
+                  buffer: decodedArtwork.buffer,
+                  originalFileName: decodedArtwork.fileName,
+                  mimeType: decodedArtwork.mimeType,
+                }
+              : null,
+            groupFile: decodedGroup
+              ? {
+                  buffer: decodedGroup.buffer,
+                  originalFileName: decodedGroup.fileName,
+                  mimeType: decodedGroup.mimeType,
+                }
+              : null,
+          });
+          db.driveConfig = driveRes.driveConfig;
+          if (driveRes.artworkResult) {
+            nextDriveFileId = driveRes.artworkResult.driveFileId;
+            nextDriveWebViewLink = driveRes.artworkResult.driveWebViewLink;
+            nextDriveSyncedAt = driveRes.artworkResult.driveSyncedAt;
+          }
+          if (driveRes.groupResult) {
+            nextGroupDriveFileId = driveRes.groupResult.driveFileId;
+            nextGroupDriveWebViewLink = driveRes.groupResult.driveWebViewLink;
+            nextGroupDriveSyncedAt = driveRes.groupResult.driveSyncedAt;
+          }
+          wroteViaOAuth = true;
+          driveSyncStatus = 'synced';
+          driveSyncMessage = `Foto asli berhasil ditulis langsung ke Google Drive folder "galery penilaian Ecoprint / Kelas ${groupSnapshot.className}".`;
         } catch (err) {
-          res.status(400).json({
-            error: err instanceof Error ? err.message : 'Gagal menggabungkan file foto.',
-          });
-          return;
+          if (err instanceof ServerDriveApiError && err.status === 401) {
+            await clearActiveDriveSession();
+          }
+          driveSyncStatus = 'error';
+          driveSyncMessage =
+            err instanceof Error
+              ? err.message
+              : 'Gagal menulis langsung ke Google Drive saat ini; foto aman tersimpan untuk disinkronkan.';
         }
-      } else {
-        const match = (imageDataUrl || '').match(/^data:([^,]*);base64,([A-Za-z0-9+/=\s]+)$/i);
-        if (!match) {
-          res.status(400).json({
-            error: 'Format gambar tidak valid. Gunakan file gambar JPG, PNG, WebP, atau HEIC.',
-          });
-          return;
-        }
-        const dataUrlHeader = match[1] || '';
-        const dataUrlMime = (dataUrlHeader.split(';')[0] || '').trim().toLowerCase();
-        const candidateMime = (originalMimeType || dataUrlMime || 'image/jpeg').toLowerCase();
-        const isAllowedImage =
-          candidateMime.startsWith('image/') ||
-          (candidateMime === 'application/octet-stream' &&
-            /\.(jpg|jpeg|png|webp|heic|heif|avif|gif|bmp)$/i.test(originalFileName || ''));
-        if (!isAllowedImage) {
-          res.status(400).json({
-            error: 'Format file bukan gambar yang didukung. Gunakan JPG, PNG, WebP, atau HEIC.',
-          });
-          return;
-        }
-        ext = mimeTypeToExtension(candidateMime, originalFileName);
-        detectedMime = candidateMime.startsWith('image/')
-          ? candidateMime
-          : MIME_BY_EXT[ext] ?? 'image/jpeg';
-        buffer = Buffer.from(match[2].replace(/\s+/g, ''), 'base64');
       }
 
-      if (buffer.byteLength > 25 * 1024 * 1024) {
-        res.status(400).json({
-          error: 'Ukuran file foto melebihi batas 25 MB.',
-        });
-        return;
+      // 2) Fallback / 24-hour Apps Script bridge if configured
+      const webhookUrl = db.driveConfig.driveWebhookUrl;
+      if (!wroteViaOAuth && webhookUrl) {
+        try {
+          if (decodedArtwork) {
+            const up = await uploadViaAppsScriptWebhook(webhookUrl, {
+              group: groupSnapshot,
+              kind: 'artwork',
+              buffer: decodedArtwork.buffer,
+              originalFileName: decodedArtwork.fileName,
+              mimeType: decodedArtwork.mimeType,
+            });
+            nextDriveFileId = up.driveFileId;
+            nextDriveWebViewLink = up.driveWebViewLink;
+            nextDriveSyncedAt = up.driveSyncedAt;
+            if (up.driveFolderId && up.driveFolderUrl) {
+              db.driveConfig = {
+                ...db.driveConfig,
+                driveFolderId: up.driveFolderId,
+                driveFolderUrl: up.driveFolderUrl,
+                driveOwnerEmail: up.driveOwnerEmail ?? db.driveConfig.driveOwnerEmail,
+                lastSyncedAt: up.driveSyncedAt,
+              };
+            }
+          }
+          if (decodedGroup) {
+            const up = await uploadViaAppsScriptWebhook(webhookUrl, {
+              group: groupSnapshot,
+              kind: 'group',
+              buffer: decodedGroup.buffer,
+              originalFileName: decodedGroup.fileName,
+              mimeType: decodedGroup.mimeType,
+            });
+            nextGroupDriveFileId = up.driveFileId;
+            nextGroupDriveWebViewLink = up.driveWebViewLink;
+            nextGroupDriveSyncedAt = up.driveSyncedAt;
+            if (up.driveFolderId && up.driveFolderUrl) {
+              db.driveConfig = {
+                ...db.driveConfig,
+                driveFolderId: up.driveFolderId,
+                driveFolderUrl: up.driveFolderUrl,
+                driveOwnerEmail: up.driveOwnerEmail ?? db.driveConfig.driveOwnerEmail,
+                lastSyncedAt: up.driveSyncedAt,
+              };
+            }
+          }
+          driveSyncStatus = 'synced';
+          driveSyncMessage = `Foto asli berhasil dikirim langsung ke Google Drive (Kelas ${groupSnapshot.className}) via Apps Script Bridge.`;
+        } catch (err) {
+          driveSyncStatus = 'error';
+          driveSyncMessage =
+            err instanceof Error
+              ? err.message
+              : 'Bridge Apps Script gagal; foto disimpan aman di server.';
+        }
       }
+    }
 
-      await saveUploadedFile(groupId, ext, detectedMime, buffer);
-
-      const fileName = `${groupId}.${ext}`;
-      const ts = Date.now();
-      photoUrl = `/uploads/${fileName}?v=${ts}`;
+    // 3) Always persist original bytes cleanly on server/Redis for fast fallback & original download
+    const ts = Date.now();
+    if (decodedArtwork) {
+      await saveUploadedFile(
+        groupId,
+        decodedArtwork.ext,
+        decodedArtwork.mimeType,
+        decodedArtwork.buffer,
+        'artwork',
+      );
+      const storedDiskName = `${groupId}.${decodedArtwork.ext}`;
+      photoUrl = `/uploads/${storedDiskName}?v=${ts}`;
       photoUpdatedAt = new Date().toISOString();
-      savedOriginalName = originalFileName?.slice(0, 140) || fileName;
-      savedOriginalSize = buffer.byteLength;
-      savedOriginalMime = detectedMime;
+      savedOriginalName = decodedArtwork.fileName;
+      savedOriginalSize = decodedArtwork.buffer.byteLength;
+      savedOriginalMime = decodedArtwork.mimeType;
 
-      nextDriveFileId = driveFileId ?? null;
-      nextDriveWebViewLink = driveWebViewLink ?? null;
-      nextDriveSyncedAt = driveSyncedAt ?? null;
+      if (driveSyncStatus !== 'synced') {
+        nextDriveFileId = driveFileId ?? null;
+        nextDriveWebViewLink = driveWebViewLink ?? null;
+        nextDriveSyncedAt = driveSyncedAt ?? null;
+      }
+    }
+
+    if (decodedGroup) {
+      await saveUploadedFile(
+        groupId,
+        decodedGroup.ext,
+        decodedGroup.mimeType,
+        decodedGroup.buffer,
+        'group',
+      );
+      const storedGroupDiskName = `${groupId}_kelompok.${decodedGroup.ext}`;
+      groupPhotoUrl = `/uploads/${storedGroupDiskName}?v=${ts}`;
+      groupPhotoUpdatedAt = new Date().toISOString();
+      savedGroupOriginalName = decodedGroup.fileName;
+      savedGroupOriginalSize = decodedGroup.buffer.byteLength;
+      savedGroupOriginalMime = decodedGroup.mimeType;
+
+      if (driveSyncStatus !== 'synced') {
+        nextGroupDriveFileId = null;
+        nextGroupDriveWebViewLink = null;
+        nextGroupDriveSyncedAt = null;
+      }
     }
 
     if (driveFolderId && driveFolderUrl) {
@@ -422,7 +678,7 @@ export function createApiApp(): express.Express {
     }
 
     db.artworksMeta[groupId] = {
-      ...existingMeta,
+      ...mergedMetaDraft,
       photoUrl,
       photoUpdatedAt,
       originalFileName: savedOriginalName,
@@ -431,23 +687,30 @@ export function createApiApp(): express.Express {
       driveFileId: nextDriveFileId,
       driveWebViewLink: nextDriveWebViewLink,
       driveSyncedAt: nextDriveSyncedAt,
-      ...(memberNames !== undefined ? { memberNames: memberNames.slice(0, 160) } : {}),
-      ...(artworkTitle !== undefined ? { artworkTitle: artworkTitle.slice(0, 80) } : {}),
-      ...(technique !== undefined ? { technique: technique.slice(0, 50) } : {}),
-      ...(leaves !== undefined ? { leaves: leaves.slice(0, 120) } : {}),
-      ...(fabric !== undefined ? { fabric: fabric.slice(0, 60) } : {}),
-      ...(mordant !== undefined ? { mordant: mordant.slice(0, 60) } : {}),
-      ...(description !== undefined ? { description: description.slice(0, 260) } : {}),
+      groupPhotoUrl,
+      groupPhotoUpdatedAt,
+      groupOriginalFileName: savedGroupOriginalName,
+      groupOriginalFileSize: savedGroupOriginalSize,
+      groupOriginalMimeType: savedGroupOriginalMime,
+      groupDriveFileId: nextGroupDriveFileId,
+      groupDriveWebViewLink: nextGroupDriveWebViewLink,
+      groupDriveSyncedAt: nextGroupDriveSyncedAt,
     };
 
     await saveDatabase(db);
     res.json({
-      state: buildApiState(db),
+      state: await buildApiState(db),
+      driveSyncStatus,
+      driveSyncMessage,
     });
   });
 
   app.delete('/api/artworks/:groupId/photo', async (req, res) => {
     const { groupId } = req.params;
+    const rawKind = typeof req.query.kind === 'string' ? req.query.kind : 'all';
+    const targetKind: PhotoKind | 'all' =
+      rawKind === 'artwork' || rawKind === 'group' ? rawKind : 'all';
+
     const db = await loadDatabase();
     const verifiedGroupId = verifyGroupToken(extractToken(req), db);
 
@@ -460,41 +723,65 @@ export function createApiApp(): express.Express {
 
     const existingMeta = db.artworksMeta[groupId] ?? {};
     const driveHeader = req.headers['x-drive-token'];
-    const driveToken =
+    const headerDriveToken =
       typeof driveHeader === 'string' && driveHeader.trim() ? driveHeader.trim() : null;
-    if (driveToken && existingMeta.driveFileId) {
-      await deleteDriveFile(driveToken, existingMeta.driveFileId).catch(() => {});
+    const sessionDrive = await getActiveDriveSession();
+    const driveToken = headerDriveToken ?? sessionDrive?.accessToken ?? null;
+
+    if (driveToken) {
+      if ((targetKind === 'all' || targetKind === 'artwork') && existingMeta.driveFileId) {
+        await deleteDriveFile(driveToken, existingMeta.driveFileId).catch(() => {});
+      }
+      if ((targetKind === 'all' || targetKind === 'group') && existingMeta.groupDriveFileId) {
+        await deleteDriveFile(driveToken, existingMeta.groupDriveFileId).catch(() => {});
+      }
     }
 
-    await deleteUploadedFile(groupId);
+    await deleteUploadedFile(groupId, targetKind);
 
-    db.artworksMeta[groupId] = {
-      ...existingMeta,
-      photoUrl: null,
-      photoUpdatedAt: null,
-      originalFileName: null,
-      originalFileSize: null,
-      originalMimeType: null,
-      driveFileId: null,
-      driveWebViewLink: null,
-      driveSyncedAt: null,
-    };
+    const nextMeta = { ...existingMeta };
+    if (targetKind === 'all' || targetKind === 'artwork') {
+      nextMeta.photoUrl = null;
+      nextMeta.photoUpdatedAt = null;
+      nextMeta.originalFileName = null;
+      nextMeta.originalFileSize = null;
+      nextMeta.originalMimeType = null;
+      nextMeta.driveFileId = null;
+      nextMeta.driveWebViewLink = null;
+      nextMeta.driveSyncedAt = null;
+    }
+    if (targetKind === 'all' || targetKind === 'group') {
+      nextMeta.groupPhotoUrl = null;
+      nextMeta.groupPhotoUpdatedAt = null;
+      nextMeta.groupOriginalFileName = null;
+      nextMeta.groupOriginalFileSize = null;
+      nextMeta.groupOriginalMimeType = null;
+      nextMeta.groupDriveFileId = null;
+      nextMeta.groupDriveWebViewLink = null;
+      nextMeta.groupDriveSyncedAt = null;
+    }
+
+    db.artworksMeta[groupId] = nextMeta;
     await saveDatabase(db);
 
-    res.json({ state: buildApiState(db) });
+    res.json({ state: await buildApiState(db) });
   });
 
-  // Serve uploaded artwork photos seamlessly across disk/tmp and Upstash Redis
+  // Serve uploaded artwork & group photos seamlessly across disk/tmp and Upstash Redis
   app.get('/uploads/:filename', async (req, res) => {
     const { filename } = req.params;
     const dotIdx = filename.lastIndexOf('.');
-    const groupId = dotIdx > 0 ? filename.slice(0, dotIdx) : filename;
+    const baseName = dotIdx > 0 ? filename.slice(0, dotIdx) : filename;
+    const isGroupPhoto = baseName.endsWith('_kelompok');
+    const groupId = isGroupPhoto ? baseName.slice(0, -'_kelompok'.length) : baseName;
+    const kind: PhotoKind = isGroupPhoto ? 'group' : 'artwork';
+
     if (!getGroupById(groupId)) {
       res.status(404).end();
       return;
     }
 
-    const fileData = await readUploadedFile(groupId);
+    const fileData = await readUploadedFile(groupId, kind);
     if (!fileData) {
       res.status(404).end();
       return;
@@ -502,7 +789,10 @@ export function createApiApp(): express.Express {
 
     const db = await loadDatabase();
     const meta = db.artworksMeta[groupId];
-    res.setHeader('Content-Type', meta?.originalMimeType || fileData.mimeType);
+    const mime = isGroupPhoto
+      ? meta?.groupOriginalMimeType || fileData.mimeType
+      : meta?.originalMimeType || fileData.mimeType;
+    res.setHeader('Content-Type', mime);
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.send(fileData.buffer);
   });
@@ -510,15 +800,23 @@ export function createApiApp(): express.Express {
   // Download exact original uploaded file (with Content-Disposition attachment)
   app.get('/api/artworks/:groupId/download-original', async (req, res) => {
     const { groupId } = req.params;
-    const fileData = await readUploadedFile(groupId);
+    const kind: PhotoKind = req.query.kind === 'group' ? 'group' : 'artwork';
+    const fileData = await readUploadedFile(groupId, kind);
     if (!fileData) {
       res.status(404).json({ error: 'File asli belum tersedia di server.' });
       return;
     }
     const db = await loadDatabase();
     const meta = db.artworksMeta[groupId];
-    const downloadName = meta?.originalFileName || `${groupId}.${fileData.ext}`;
-    res.setHeader('Content-Type', meta?.originalMimeType || fileData.mimeType);
+    const downloadName =
+      kind === 'group'
+        ? meta?.groupOriginalFileName || `${groupId}_kelompok.${fileData.ext}`
+        : meta?.originalFileName || `${groupId}.${fileData.ext}`;
+    const mime =
+      kind === 'group'
+        ? meta?.groupOriginalMimeType || fileData.mimeType
+        : meta?.originalMimeType || fileData.mimeType;
+    res.setHeader('Content-Type', mime);
     res.setHeader(
       'Content-Disposition',
       `attachment; filename="${downloadName.replace(/"/g, '')}"`,
@@ -529,24 +827,82 @@ export function createApiApp(): express.Express {
   // Stream original uploaded file bytes for Admin Google Drive auto-sync
   app.get('/api/admin/original-file/:groupId', async (req, res) => {
     const { groupId } = req.params;
+    const kind: PhotoKind = req.query.kind === 'group' ? 'group' : 'artwork';
     const db = await loadDatabase();
     if (!verifyAdminToken(extractToken(req), db)) {
       res.status(401).json({ error: 'Akses ditolak.' });
       return;
     }
 
-    const fileData = await readUploadedFile(groupId);
+    const fileData = await readUploadedFile(groupId, kind);
     if (!fileData) {
       res.status(404).json({ error: 'File asli belum tersedia di server.' });
       return;
     }
 
     const meta = db.artworksMeta[groupId];
-    res.setHeader('Content-Type', meta?.originalMimeType || fileData.mimeType);
-    if (meta?.originalFileName) {
-      res.setHeader('X-Original-Filename', encodeURIComponent(meta.originalFileName));
+    const mime =
+      kind === 'group'
+        ? meta?.groupOriginalMimeType || fileData.mimeType
+        : meta?.originalMimeType || fileData.mimeType;
+    const origName =
+      kind === 'group' ? meta?.groupOriginalFileName : meta?.originalFileName;
+    res.setHeader('Content-Type', mime);
+    if (origName) {
+      res.setHeader('X-Original-Filename', encodeURIComponent(origName));
     }
     res.send(fileData.buffer);
+  });
+
+  // Register active teacher Drive OAuth session on server so students can write directly to Drive upon upload
+  app.post('/api/admin/drive-session', async (req, res) => {
+    const db = await loadDatabase();
+    if (!verifyAdminToken(extractToken(req), db)) {
+      res.status(401).json({ error: 'Akses ditolak. Silakan login Admin Guru.' });
+      return;
+    }
+    const driveTokenHeader = req.headers['x-drive-token'];
+    const driveAccessToken =
+      typeof driveTokenHeader === 'string' ? driveTokenHeader.trim() : '';
+    if (!driveAccessToken) {
+      res.status(400).json({ error: 'Token Google Drive tidak disertakan.' });
+      return;
+    }
+    const { ownerEmail } = req.body as { ownerEmail?: string | null };
+    await setActiveDriveSession(driveAccessToken, ownerEmail ?? db.driveConfig.driveOwnerEmail);
+    res.json({ ok: true, state: await buildApiState(db) });
+  });
+
+  app.post('/api/admin/drive-disconnect', async (req, res) => {
+    const db = await loadDatabase();
+    if (!verifyAdminToken(extractToken(req), db)) {
+      res.status(401).json({ error: 'Akses ditolak.' });
+      return;
+    }
+    await clearActiveDriveSession();
+    res.json({ ok: true, state: await buildApiState(db) });
+  });
+
+  app.post('/api/admin/drive-webhook', async (req, res) => {
+    const db = await loadDatabase();
+    if (!verifyAdminToken(extractToken(req), db)) {
+      res.status(401).json({ error: 'Akses ditolak.' });
+      return;
+    }
+    const { driveWebhookUrl } = req.body as { driveWebhookUrl?: string | null };
+    const trimmed = typeof driveWebhookUrl === 'string' ? driveWebhookUrl.trim() : '';
+    if (trimmed && !/^https:\/\/(script\.google\.com|script\.googleusercontent\.com)\//i.test(trimmed)) {
+      res.status(400).json({
+        error: 'URL Bridge harus berasal dari Web App Google Apps Script (https://script.google.com/...).',
+      });
+      return;
+    }
+    db.driveConfig = {
+      ...db.driveConfig,
+      driveWebhookUrl: trimmed || null,
+    };
+    await saveDatabase(db);
+    res.json({ ok: true, state: await buildApiState(db) });
   });
 
   app.post('/api/admin/drive-sync', async (req, res) => {
@@ -571,6 +927,7 @@ export function createApiApp(): express.Express {
     };
 
     try {
+      await setActiveDriveSession(driveAccessToken, ownerEmail ?? db.driveConfig.driveOwnerEmail);
       const catalog = buildCatalogWithOverrides(db.artworksMeta);
       const recapitulation = computeRecapitulation(db.submissions, catalog);
 
@@ -580,8 +937,8 @@ export function createApiApp(): express.Express {
         driveConfig: db.driveConfig,
         catalog,
         recapitulation,
-        readUploadedFileBuffer: async (gid) => {
-          const data = await readUploadedFile(gid);
+        readUploadedFileBuffer: async (gid, kind) => {
+          const data = await readUploadedFile(gid, kind);
           return data ? { buffer: data.buffer, mimeType: data.mimeType } : null;
         },
         applyOpenAccess,
@@ -591,22 +948,34 @@ export function createApiApp(): express.Express {
       db.driveConfig = syncResult.driveConfig;
       for (const item of syncResult.syncedItems) {
         const prev = db.artworksMeta[item.groupId] ?? {};
-        db.artworksMeta[item.groupId] = {
-          ...prev,
-          driveFileId: item.driveFileId,
-          driveWebViewLink: item.driveWebViewLink,
-          driveSyncedAt: item.driveSyncedAt,
-        };
+        if (item.kind === 'group') {
+          db.artworksMeta[item.groupId] = {
+            ...prev,
+            groupDriveFileId: item.driveFileId,
+            groupDriveWebViewLink: item.driveWebViewLink,
+            groupDriveSyncedAt: item.driveSyncedAt,
+          };
+        } else {
+          db.artworksMeta[item.groupId] = {
+            ...prev,
+            driveFileId: item.driveFileId,
+            driveWebViewLink: item.driveWebViewLink,
+            driveSyncedAt: item.driveSyncedAt,
+          };
+        }
       }
       await saveDatabase(db);
 
       res.json({
-        state: buildApiState(db),
+        state: await buildApiState(db),
         syncedCount: syncResult.syncedItems.length,
         driveFiles: syncResult.driveFiles,
         openAccessMessage: syncResult.openAccessMessage ?? null,
       });
     } catch (err) {
+      if (err instanceof ServerDriveApiError && err.status === 401) {
+        await clearActiveDriveSession();
+      }
       if (err instanceof ServerDriveApiError) {
         res.status(err.status >= 400 && err.status < 600 ? err.status : 500).json({
           error: err.message,
@@ -638,6 +1007,7 @@ export function createApiApp(): express.Express {
 
     const { ownerEmail } = req.body as { ownerEmail?: string | null };
     try {
+      await setActiveDriveSession(driveAccessToken, ownerEmail ?? db.driveConfig.driveOwnerEmail);
       const rootFolder = await ensureRootFolder(
         driveAccessToken,
         db.driveConfig.driveFolderId,
@@ -659,11 +1029,14 @@ export function createApiApp(): express.Express {
       };
       await saveDatabase(db);
       res.json({
-        state: buildApiState(db),
+        state: await buildApiState(db),
         status: accessRes.status,
         message: accessRes.message ?? null,
       });
     } catch (err) {
+      if (err instanceof ServerDriveApiError && err.status === 401) {
+        await clearActiveDriveSession();
+      }
       if (err instanceof ServerDriveApiError) {
         res.status(err.status >= 400 && err.status < 600 ? err.status : 500).json({
           error: err.message,
@@ -758,7 +1131,7 @@ export function createApiApp(): express.Express {
       lastSyncedAt: new Date().toISOString(),
     };
     await saveDatabase(db);
-    res.json(buildApiState(db));
+    res.json(await buildApiState(db));
   });
 
   app.post('/api/admin/drive-sync-record', async (req, res) => {
@@ -767,8 +1140,9 @@ export function createApiApp(): express.Express {
     const isAdmin = verifyAdminToken(token, db);
     const groupIdFromToken = verifyGroupToken(token, db);
 
-    const { groupId, driveFileId, driveWebViewLink, manifestFileId } = req.body as {
+    const { groupId, kind = 'artwork', driveFileId, driveWebViewLink, manifestFileId } = req.body as {
       groupId?: string;
+      kind?: PhotoKind;
       driveFileId?: string;
       driveWebViewLink?: string;
       manifestFileId?: string | null;
@@ -785,19 +1159,28 @@ export function createApiApp(): express.Express {
     }
 
     const existingMeta = db.artworksMeta[groupId] ?? {};
+    const nowIso = new Date().toISOString();
     db.artworksMeta[groupId] = {
       ...existingMeta,
-      driveFileId,
-      driveWebViewLink,
-      driveSyncedAt: new Date().toISOString(),
+      ...(kind === 'group'
+        ? {
+            groupDriveFileId: driveFileId,
+            groupDriveWebViewLink: driveWebViewLink,
+            groupDriveSyncedAt: nowIso,
+          }
+        : {
+            driveFileId,
+            driveWebViewLink,
+            driveSyncedAt: nowIso,
+          }),
     };
     if (manifestFileId !== undefined) {
       db.driveConfig.manifestFileId = manifestFileId;
     }
-    db.driveConfig.lastSyncedAt = new Date().toISOString();
+    db.driveConfig.lastSyncedAt = nowIso;
     await saveDatabase(db);
 
-    res.json(buildApiState(db));
+    res.json(await buildApiState(db));
   });
 
   app.post('/api/assessments', async (req, res) => {
@@ -841,7 +1224,7 @@ export function createApiApp(): express.Express {
 
     res.status(201).json({
       submission: lockedSubmission,
-      state: buildApiState(db),
+      state: await buildApiState(db),
     });
   });
 
@@ -881,7 +1264,7 @@ export function createApiApp(): express.Express {
       typeof req.body?.count === 'number' ? Math.min(20, Math.max(1, req.body.count)) : 10;
     db.submissions = generateAdditionalDemoSubmissions(db.submissions, count);
     await saveDatabase(db);
-    res.json(buildApiState(db));
+    res.json(await buildApiState(db));
   });
 
   app.post('/api/admin/reset', async (req, res) => {
@@ -892,7 +1275,7 @@ export function createApiApp(): express.Express {
     }
     db.submissions = [];
     await saveDatabase(db);
-    res.json(buildApiState(db));
+    res.json(await buildApiState(db));
   });
 
   app.post('/api/admin/unlock-group', async (req, res) => {
@@ -908,7 +1291,7 @@ export function createApiApp(): express.Express {
     }
     db.submissions = db.submissions.filter((s) => s.evaluatorGroupId !== groupId);
     await saveDatabase(db);
-    res.json(buildApiState(db));
+    res.json(await buildApiState(db));
   });
 
   return app;

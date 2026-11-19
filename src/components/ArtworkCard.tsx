@@ -49,11 +49,12 @@ export const ArtworkCard: React.FC<ArtworkCardProps> = ({
   const driveThumbUrl = artwork.driveFileId
     ? `https://drive.google.com/thumbnail?id=${artwork.driveFileId}&sz=w1000`
     : null;
+  // Prefer Google Drive preview first once synced, falling back seamlessly to /uploads/...
   const displayPhotoUrl =
-    !localFailed && artwork.photoUrl
-      ? artwork.photoUrl
-      : !driveFailed && driveThumbUrl
-        ? driveThumbUrl
+    !driveFailed && driveThumbUrl
+      ? driveThumbUrl
+      : !localFailed && artwork.photoUrl
+        ? artwork.photoUrl
         : null;
   const hasUploadedPhoto = Boolean(displayPhotoUrl);
 
@@ -67,7 +68,7 @@ export const ArtworkCard: React.FC<ArtworkCardProps> = ({
             : 'border-[#E3DED4] hover:border-[#C9C1B2]'
       }`}
     >
-      {/* Artwork Photo Slot */}
+      {/* Artwork Photo Slot (ONLY Foto Karya displayed on Dashboard) */}
       <div className="relative aspect-[4/3] bg-[#EFECE5] overflow-hidden border-b border-[#ECE7DE]">
         {hasUploadedPhoto ? (
           <img
@@ -75,10 +76,10 @@ export const ArtworkCard: React.FC<ArtworkCardProps> = ({
             alt={`Karya ecoprint ${artwork.artworkTitle} oleh Kelompok ${artwork.groupId}`}
             referrerPolicy="no-referrer"
             onError={() => {
-              if (!localFailed && artwork.photoUrl) {
-                setLocalFailed(true);
-              } else {
+              if (!driveFailed && driveThumbUrl && displayPhotoUrl === driveThumbUrl) {
                 setDriveFailed(true);
+              } else {
+                setLocalFailed(true);
               }
             }}
             className={`w-full h-full object-cover transition-transform duration-300 ${

@@ -2,8 +2,10 @@ import React, { useState } from 'react';
 import type { User } from 'firebase/auth';
 import {
   AlertTriangle,
+  Check,
   CheckCircle2,
   Cloud,
+  Copy,
   Download,
   ExternalLink,
   Eye,
@@ -11,6 +13,7 @@ import {
   FolderOpen,
   Globe,
   KeyRound,
+  Link2,
   Lock,
   LogOut,
   Printer,
@@ -45,6 +48,7 @@ interface AdminViewProps {
   submissions: AssessmentSubmission[];
   recapitulation: RecapitulationSummary;
   driveConfig: DriveArchiveConfig;
+  driveBridgeConnected?: boolean;
   runtimeInfo?: RuntimeStorageInfo | null;
   driveUser: User | null;
   driveAccessToken: string | null;
@@ -61,6 +65,7 @@ interface AdminViewProps {
   onRetryDriveSync: () => Promise<void>;
   onConfigureOpenAccess: () => Promise<void>;
   onRefreshDriveFiles: () => Promise<void>;
+  onSaveDriveWebhook: (url: string) => Promise<boolean>;
   onOpenPrintablePasswords: () => void;
   onSeedDemo: () => Promise<void>;
   onResetAll: () => Promise<void>;
@@ -77,12 +82,44 @@ function formatBytes(bytes?: number | string | null): string {
   return `${(num / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+const APPS_SCRIPT_TEMPLATE = `function doPost(e) {
+  try {
+    var payload = JSON.parse(e.postData.contents);
+    var rootName = payload.folderName || 'galery penilaian Ecoprint';
+    var rootIter = DriveApp.getFoldersByName(rootName);
+    var root = rootIter.hasNext() ? rootIter.next() : DriveApp.createFolder(rootName);
+    root.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+    var clsName = payload.classFolderName || ('Kelas ' + payload.className);
+    var subIter = root.getFoldersByName(clsName);
+    var sub = subIter.hasNext() ? subIter.next() : root.createFolder(clsName);
+
+    var bytes = Utilities.base64Decode(payload.base64);
+    var blob = Utilities.newBlob(bytes, payload.mimeType || 'image/jpeg', payload.fileName);
+    var file = sub.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+    return ContentService.createTextOutput(JSON.stringify({
+      ok: true,
+      fileId: file.getId(),
+      webViewLink: file.getUrl(),
+      folderId: root.getId(),
+      folderUrl: root.getUrl(),
+      ownerEmail: Session.getEffectiveUser().getEmail()
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}`;
+
 export const AdminView: React.FC<AdminViewProps> = ({
   adminToken,
   catalog,
   submissions,
   recapitulation,
   driveConfig,
+  driveBridgeConnected = false,
   runtimeInfo,
   driveUser,
   driveAccessToken,
@@ -99,6 +136,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
   onRetryDriveSync,
   onConfigureOpenAccess,
   onRefreshDriveFiles,
+  onSaveDriveWebhook,
   onOpenPrintablePasswords,
   onSeedDemo,
   onResetAll,
@@ -111,6 +149,14 @@ export const AdminView: React.FC<AdminViewProps> = ({
   const [confirmResetOpen, setConfirmResetOpen] = useState(false);
   const [confirmSyncOverwriteOpen, setConfirmSyncOverwriteOpen] = useState(false);
   const [confirmOpenAccessModal, setConfirmOpenAccessModal] = useState(false);
+  const [bridgePanelOpen, setBridgePanelOpen] = useState(false);
+  const [webhookInput, setWebhookInput] = useState(driveConfig.driveWebhookUrl ?? '');
+  const [isSavingWebhook, setIsSavingWebhook] = useState(false);
+  const [copiedScript, setCopiedScript] = useState(false);
+
+  React.useEffect(() => {
+    setWebhookInput(driveConfig.driveWebhookUrl ?? '');
+  }, [driveConfig.driveWebhookUrl]);
 
   const handleDownloadCsv = () => {
     const csv = buildCatalogCsv(catalog, recapitulation);
@@ -126,12 +172,20 @@ export const AdminView: React.FC<AdminViewProps> = ({
   };
 
   const lockedIds = new Set(submissions.map((s) => s.evaluatorGroupId));
-  const uploadedArtworks = catalog.filter(
-    (g) => Boolean(g.photoUrl || g.driveWebViewLink),
+  const uploadedArtworks = catalog.filter((g) =>
+    Boolean(
+      g.photoUrl ||
+        g.driveWebViewLink ||
+        g.groupPhotoUrl ||
+        g.groupDriveWebViewLink,
+    ),
   );
-  const pendingDriveCount = catalog.filter(
-    (g) => Boolean(g.photoUrl) && !g.driveFileId,
-  ).length;
+  const pendingDriveCount = catalog.reduce((acc, g) => {
+    let n = 0;
+    if (g.photoUrl && !g.driveFileId) n++;
+    if (g.groupPhotoUrl && !g.groupDriveFileId) n++;
+    return acc + n;
+  }, 0);
   const isWrongDriveAccount =
     Boolean(driveUser?.email) &&
     driveUser?.email?.toLowerCase() !== TEACHER_EXPECTED_EMAIL.toLowerCase();
@@ -522,6 +576,12 @@ export const AdminView: React.FC<AdminViewProps> = ({
                   ? `Tersimpan di Drive ${driveConfig.driveOwnerEmail ?? TEACHER_EXPECTED_EMAIL} · ${recapitulation.driveSyncedCount} karya ukuran asli tersinkron`
                   : `Klik "Sign in with Google" di atas dengan akun ${TEACHER_EXPECTED_EMAIL} untuk membuat folder "${TARGET_FOLDER_NAME}" dan mengaktifkan penyimpanan otomatis.`}
               </p>
+              <p className="text-[11px] font-medium text-[#1B4332]">
+                Status Upload Langsung ke Drive:{' '}
+                {driveBridgeConnected || driveAccessToken
+                  ? 'Aktif — Foto siswa langsung ditulis ke Google Drive terlebih dahulu saat diunggah'
+                  : 'Menunggu Sign in dengan Google (atau atur Apps Script Bridge 24 jam di bawah)'}
+              </p>
             </div>
 
             {driveConfig.driveFolderUrl ? (
@@ -542,14 +602,93 @@ export const AdminView: React.FC<AdminViewProps> = ({
             )}
           </div>
 
+          {/* Optional 24/7 Apps Script Bridge for direct student->Drive upload even when teacher closes browser */}
+          <div className="border border-[#E3DED4] rounded-xl overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setBridgePanelOpen((prev) => !prev)}
+              className="w-full px-4 py-3 bg-[#FCFBF8] hover:bg-[#F5F2EC] flex items-center justify-between gap-3 text-left text-xs transition-colors"
+            >
+              <span className="inline-flex items-center gap-2 font-semibold text-[#1A1917]">
+                <Link2 className="w-3.5 h-3.5 text-[#1B4332]" aria-hidden="true" />
+                <span>
+                  Bridge Apps Script 24 Jam (Opsional — Upload Langsung ke Drive Tanpa Guru Tetap Login)
+                </span>
+              </span>
+              <span className="text-[#5E5A52] font-medium">
+                {driveConfig.driveWebhookUrl ? 'Aktif' : bridgePanelOpen ? 'Tutup' : 'Atur'}
+              </span>
+            </button>
+
+            {bridgePanelOpen && (
+              <div className="p-4 border-t border-[#E3DED4] bg-white space-y-3 text-xs">
+                <p className="text-[#5E5A52] leading-relaxed">
+                  Token login Google di browser berlaku sekitar 1 jam. Jika ingin siswa bisa mengunggah <strong>langsung ke Google Drive Anda 24 jam</strong> meskipun browser guru ditutup, buat Google Apps Script (<span className="font-mono">script.google.com</span>) milik akun <span className="font-mono text-[#1A1917]">{TEACHER_EXPECTED_EMAIL}</span> menggunakan kode di bawah, deploy sebagai Web App (<em>Who has access: Anyone</em>), lalu tempel URL <span className="font-mono">/exec</span> di sini:
+                </p>
+
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="url"
+                    value={webhookInput}
+                    onChange={(e) => setWebhookInput(e.target.value)}
+                    placeholder="https://script.google.com/macros/s/.../exec"
+                    className="flex-1 px-3 py-2 text-xs font-mono bg-[#F8F6F1] border border-[#E3DED4] rounded-lg"
+                  />
+                  <button
+                    type="button"
+                    disabled={isSavingWebhook}
+                    onClick={async () => {
+                      setIsSavingWebhook(true);
+                      await onSaveDriveWebhook(webhookInput);
+                      setIsSavingWebhook(false);
+                    }}
+                    className="px-4 py-2 rounded-lg bg-[#1B4332] hover:bg-[#143326] text-white font-semibold whitespace-nowrap shrink-0"
+                  >
+                    {isSavingWebhook ? 'Menyimpan...' : 'Simpan URL Bridge'}
+                  </button>
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-[#1A1917]">Kode Google Apps Script (Salin ke Code.gs)</span>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await navigator.clipboard.writeText(APPS_SCRIPT_TEMPLATE);
+                        setCopiedScript(true);
+                        window.setTimeout(() => setCopiedScript(false), 2000);
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-[#E3DED4] bg-[#F8F6F1] hover:bg-[#EFECE5] text-[#1A1917] font-medium"
+                    >
+                      {copiedScript ? (
+                        <>
+                          <Check className="w-3 h-3 text-[#1B4332]" aria-hidden="true" />
+                          <span>Tersalin</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3 h-3" aria-hidden="true" />
+                          <span>Salin Kode</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <pre className="p-3 rounded-lg bg-[#1A1917] text-[#E5E2DC] text-[11px] font-mono overflow-x-auto max-h-48">
+                    {APPS_SCRIPT_TEMPLATE}
+                  </pre>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Collected Artwork Drive Links Table */}
           <div>
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-[#1A1917]">
-                Daftar Link Google Drive Karya yang Terkumpul ({uploadedArtworks.length})
+                Daftar Link Google Drive Karya &amp; Foto Kelompok Terkumpul ({uploadedArtworks.length})
               </h3>
               <span className="text-xs text-[#5E5A52] font-mono tabular-nums">
-                {recapitulation.driveSyncedCount} tersinkron di Drive
+                {recapitulation.driveSyncedCount} karya di Drive
               </span>
             </div>
 
@@ -564,9 +703,9 @@ export const AdminView: React.FC<AdminViewProps> = ({
                     <tr className="border-b border-[#E3DED4] bg-[#FCFBF8] text-[#5E5A52]">
                       <th className="py-2.5 px-4 font-semibold">Kelompok</th>
                       <th className="py-2.5 px-4 font-semibold">Judul Karya &amp; Daun</th>
-                      <th className="py-2.5 px-4 font-semibold">File Asli</th>
-                      <th className="py-2.5 px-4 font-semibold">Status Drive</th>
-                      <th className="py-2.5 px-4 font-semibold text-right">Tautan Google Drive</th>
+                      <th className="py-2.5 px-4 font-semibold">1. Foto Karya</th>
+                      <th className="py-2.5 px-4 font-semibold">2. Foto Kelompok</th>
+                      <th className="py-2.5 px-4 font-semibold text-right">Aksi / Drive</th>
                     </tr>
                   </thead>
                     <tbody className="divide-y divide-[#ECE7DE]">
@@ -587,46 +726,87 @@ export const AdminView: React.FC<AdminViewProps> = ({
                             Subfolder: Kelas {art.className}
                           </div>
                         </td>
-                        <td className="py-3 px-4 font-mono text-[#5E5A52] tabular-nums">
-                          <div>{art.originalFileName ?? `${art.groupId}.jpg`}</div>
-                          <div className="text-[11px]">{formatBytes(art.originalFileSize)}</div>
-                        </td>
-                        <td className="py-3 px-4 whitespace-nowrap">
-                          {art.driveWebViewLink ? (
-                            <span className="inline-flex items-center gap-1 text-[#1B4332] font-semibold">
-                              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                              <span>Tersinkron</span>
-                            </span>
+                        <td className="py-3 px-4 text-xs">
+                          {art.photoUrl || art.driveWebViewLink ? (
+                            <div className="space-y-0.5">
+                              <div className="font-mono text-[#1A1917] truncate max-w-[150px]">
+                                {art.originalFileName ?? `${art.groupId}.jpg`}
+                              </div>
+                              <div className="text-[11px] font-mono text-[#5E5A52] tabular-nums">
+                                {formatBytes(art.originalFileSize)} ·{' '}
+                                {art.driveWebViewLink ? (
+                                  <span className="text-[#1B4332] font-semibold">Di Drive</span>
+                                ) : (
+                                  <span className="text-[#B45309]">Menunggu Sync</span>
+                                )}
+                              </div>
+                            </div>
                           ) : (
-                            <span className="text-[#B45309] font-medium">
-                              Menunggu Sinkron Drive
-                            </span>
+                            <span className="text-[#8A8479]">Belum diupload</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 text-xs">
+                          {art.groupPhotoUrl || art.groupDriveWebViewLink ? (
+                            <div className="space-y-0.5">
+                              <div className="font-mono text-[#1A1917] truncate max-w-[150px]">
+                                {art.groupOriginalFileName ?? `${art.groupId}_kelompok.jpg`}
+                              </div>
+                              <div className="text-[11px] font-mono text-[#5E5A52] tabular-nums">
+                                {formatBytes(art.groupOriginalFileSize)} ·{' '}
+                                {art.groupDriveWebViewLink ? (
+                                  <span className="text-[#1B4332] font-semibold">Di Drive</span>
+                                ) : (
+                                  <span className="text-[#B45309]">Menunggu Sync</span>
+                                )}
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-[#8A8479]">Belum diupload</span>
                           )}
                         </td>
                         <td className="py-3 px-4 text-right whitespace-nowrap">
-                          <div className="inline-flex items-center justify-end gap-2">
+                          <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
                             {art.photoUrl && (
                               <a
-                                href={`/api/artworks/${encodeURIComponent(art.groupId)}/download-original`}
+                                href={`/api/artworks/${encodeURIComponent(art.groupId)}/download-original?kind=artwork`}
                                 download={art.originalFileName ?? `${art.groupId}.jpg`}
-                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-[#E3DED4] bg-white text-[#1A1917] hover:bg-[#F0EDE6] font-medium transition-colors"
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[#E3DED4] bg-white text-[#1A1917] hover:bg-[#F0EDE6] font-medium transition-colors"
                               >
                                 <Download className="w-3 h-3" aria-hidden="true" />
-                                <span>Unduh Asli</span>
+                                <span>Karya</span>
                               </a>
                             )}
-                            {art.driveWebViewLink ? (
+                            {art.driveWebViewLink && (
                               <a
                                 href={art.driveWebViewLink}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#1B4332] text-[#1B4332] hover:bg-[#1B4332] hover:text-white font-semibold transition-colors"
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-[#1B4332] text-[#1B4332] hover:bg-[#1B4332] hover:text-white font-semibold transition-colors"
                               >
-                                <span>Buka di Drive</span>
+                                <span>Drive Karya</span>
                                 <ExternalLink className="w-3 h-3" aria-hidden="true" />
                               </a>
-                            ) : (
-                              <span className="text-[#8A8479]">Belum disinkronkan</span>
+                            )}
+                            {art.groupPhotoUrl && (
+                              <a
+                                href={`/api/artworks/${encodeURIComponent(art.groupId)}/download-original?kind=group`}
+                                download={art.groupOriginalFileName ?? `${art.groupId}_kelompok.jpg`}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded border border-[#E3DED4] bg-white text-[#1A1917] hover:bg-[#F0EDE6] font-medium transition-colors"
+                              >
+                                <Download className="w-3 h-3" aria-hidden="true" />
+                                <span>Kelompok</span>
+                              </a>
+                            )}
+                            {art.groupDriveWebViewLink && (
+                              <a
+                                href={art.groupDriveWebViewLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-[#1B4332] text-[#1B4332] hover:bg-[#1B4332] hover:text-white font-semibold transition-colors"
+                              >
+                                <span>Drive Kelompok</span>
+                                <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                              </a>
                             )}
                           </div>
                         </td>
