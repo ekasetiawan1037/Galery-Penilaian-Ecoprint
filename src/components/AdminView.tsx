@@ -80,7 +80,9 @@ interface AdminViewProps {
   onSeedDemo: () => Promise<void>;
   onResetAll: () => Promise<void>;
   onUnlockGroup: (groupId: string) => Promise<void>;
+  onLockGroup?: (groupId: string) => Promise<void>;
   onEditGroup: (group: ArtworkGroup) => void;
+  onPullFromDrive?: () => Promise<void>;
 }
 
 const TEACHER_EXPECTED_EMAIL = 'eka.setiawan1037@guru.smp.belajar.id';
@@ -181,7 +183,9 @@ export const AdminView: React.FC<AdminViewProps> = ({
   onSeedDemo,
   onResetAll,
   onUnlockGroup,
+  onLockGroup,
   onEditGroup,
+  onPullFromDrive,
 }) => {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -494,6 +498,16 @@ export const AdminView: React.FC<AdminViewProps> = ({
                     aria-hidden="true"
                   />
                   <span>Sinkronkan Sekarang</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isSyncingDrive}
+                  onClick={onPullFromDrive}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border border-[#1B4332] bg-white hover:bg-[#F2F7F4] text-[#1B4332] transition-colors whitespace-nowrap shrink-0"
+                >
+                  <Cloud className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Tarik Data dari Drive</span>
                 </button>
 
                 <button
@@ -1041,15 +1055,25 @@ export const AdminView: React.FC<AdminViewProps> = ({
                             <span>Edit Nama, Deskripsi &amp; Foto</span>
                           </button>
 
-                          {isLocked && (
+                          {isLocked ? (
                             <button
                               type="button"
                               disabled={isBusy}
                               onClick={() => onUnlockGroup(group.groupId)}
-                              className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded border border-[#E3DED4] bg-white hover:bg-[#FEF2F2] hover:border-[#FECACA] text-[11px] font-medium text-[#991B1B] transition-colors"
+                              className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded border border-[#FECACA] bg-[#FEF2F2] hover:bg-[#FEE2E2] text-[11px] font-medium text-[#991B1B] transition-colors"
                             >
                               <Unlock className="w-3 h-3" aria-hidden="true" />
                               <span>Buka Kunci Penilaian</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => onLockGroup?.(group.groupId)}
+                              className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded border border-[#E3DED4] bg-white hover:bg-[#F0EDE6] text-[11px] font-medium text-[#1B4332] transition-colors"
+                            >
+                              <Lock className="w-3 h-3" aria-hidden="true" />
+                              <span>Kunci Penilaian</span>
                             </button>
                           )}
                         </div>

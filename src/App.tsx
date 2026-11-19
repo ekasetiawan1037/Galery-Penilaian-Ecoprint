@@ -351,6 +351,7 @@ export default function App() {
     [driveAccessToken, adminToken, driveUser?.email, applyApiState],
   );
 
+
   // Auto-pull & sync from Google Drive once when Admin session + Drive token are both active
   useEffect(() => {
     if (!adminToken || !driveAccessToken) {
@@ -573,6 +574,59 @@ export default function App() {
     } catch {
       setToastMessage('Gagal menghubungi server saat menyimpan URL Bridge.');
       return false;
+    }
+  };
+
+  const handlePullFromDrive = async () => {
+    if (!driveAccessToken || !adminToken) {
+      setToastMessage('Hubungkan Google Drive terlebih dahulu melalui Sign in with Google.');
+      return;
+    }
+    setIsSyncingDrive(true);
+    setDriveError(null);
+    setDriveActivationUrl(null);
+    try {
+      const res = await fetch('/api/admin/drive-pull', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminToken}`,
+          'X-Drive-Token': driveAccessToken,
+        },
+      });
+      const payload = (await res.json()) as {
+        state?: ApiStateResponse;
+        pulledGroupsCount?: number;
+        pulledVotesCount?: number;
+        syncedCount?: number;
+        driveFiles?: DriveUploadedFileInfo[];
+        error?: string;
+        activationUrl?: string | null;
+      };
+      if (!res.ok) {
+        const msg = payload.error || 'Gagal menarik data dari Google Drive.';
+        setDriveError(msg);
+        if (payload.activationUrl) setDriveActivationUrl(payload.activationUrl);
+        setToastMessage(msg);
+        return;
+      }
+      if (payload.state) {
+        applyApiState(payload.state);
+      }
+      if (payload.driveFiles) {
+        setDriveFolderFiles(payload.driveFiles);
+      }
+      const pGroups = payload.pulledGroupsCount ?? 0;
+      const pVotes = payload.pulledVotesCount ?? 0;
+      setToastMessage(
+        `Tarik data Google Drive berhasil: ${pGroups} data karya & ${pVotes} suara berhasil ditarik dari Drive ke server.`,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Gagal menarik data dari Google Drive.';
+      setDriveError(msg);
+      setToastMessage(msg);
+    } finally {
+      setIsSyncingDrive(false);
     }
   };
 
@@ -888,6 +942,28 @@ export default function App() {
         const data = (await res.json()) as ApiStateResponse;
         applyApiState(data);
         setToastMessage(`Kunci penilaian Kelompok ${groupId} telah dibuka kembali.`);
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleLockGroup = async (groupId: string) => {
+    if (!adminToken) return;
+    setIsSubmitting(true);
+    try {
+      const res = await fetch('/api/admin/lock-group', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${adminToken}`,
+        },
+        body: JSON.stringify({ groupId }),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as ApiStateResponse;
+        applyApiState(data);
+        setToastMessage(`Penilaian Kelompok ${groupId} berhasil dikunci.`);
       }
     } finally {
       setIsSubmitting(false);

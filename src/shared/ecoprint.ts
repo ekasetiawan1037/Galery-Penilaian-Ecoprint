@@ -184,10 +184,10 @@ export const RANK_CONFIG: ReadonlyArray<{
   label: string;
   shortLabel: string;
 }> = [
-  { rank: 1, stars: 4, label: 'Peringkat 1', shortLabel: '4 Bintang' },
-  { rank: 2, stars: 3, label: 'Peringkat 2', shortLabel: '3 Bintang' },
-  { rank: 3, stars: 2, label: 'Peringkat 3', shortLabel: '2 Bintang' },
-  { rank: 4, stars: 1, label: 'Peringkat 4', shortLabel: '1 Bintang' },
+  { rank: 1, stars: 4, label: '★★★★', shortLabel: '★★★★' },
+  { rank: 2, stars: 3, label: '★★★', shortLabel: '★★★' },
+  { rank: 3, stars: 2, label: '★★', shortLabel: '★★' },
+  { rank: 4, stars: 1, label: '★', shortLabel: '★' },
 ];
 
 export function rankToStars(rank: RankNumber): StarPoints {

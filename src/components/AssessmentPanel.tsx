@@ -146,8 +146,8 @@ export const AssessmentPanel: React.FC<AssessmentPanelProps> = ({
                 >
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 text-xs text-[#5E5A52]">
-                      <span className="font-mono font-semibold text-[#1A1917] tabular-nums">
-                        Peringkat {vote.rank}
+                      <span className="font-mono font-semibold text-[#1A1917] tabular-nums text-base">
+                        {vote.stars === 4 ? '★★★★' : vote.stars === 3 ? '★★★' : vote.stars === 2 ? '★★' : '★'}
                       </span>
                       <span aria-hidden="true">·</span>
                       <span className="font-mono tabular-nums">{vote.artworkGroupId}</span>

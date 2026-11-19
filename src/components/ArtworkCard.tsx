@@ -260,15 +260,15 @@ export const ArtworkCard: React.FC<ArtworkCardProps> = ({
                             : 'bg-white border-[#E3DED4] text-[#1A1917] hover:border-[#1B4332] hover:bg-[#F3F6F4]'
                       }`}
                     >
-                      <div className="text-xs font-semibold tabular-nums leading-none">
-                        P{cfg.rank}
+                      <div className="text-sm font-bold tabular-nums leading-none">
+                        {cfg.label}
                       </div>
                       <div
                         className={`text-[11px] tabular-nums mt-1 leading-none ${
                           isThisRank ? 'text-[#FCD34D]' : 'text-[#B45309]'
                         }`}
                       >
-                        {cfg.stars}★
+                        {cfg.stars} Poin
                       </div>
                     </button>
                   );

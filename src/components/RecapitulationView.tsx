@@ -325,7 +325,7 @@ export const RecapitulationView: React.FC<RecapitulationViewProps> = ({
                     const art = getGroupById(v.artworkGroupId, catalog);
                     return (
                       <span key={v.artworkGroupId} title={art?.artworkTitle}>
-                        P{v.rank}: <strong>{v.artworkGroupId}</strong> ({v.stars}★)
+                        {v.stars === 4 ? '★★★★' : v.stars === 3 ? '★★★' : v.stars === 2 ? '★★' : '★'}: <strong>{v.artworkGroupId}</strong> ({v.stars}★)
                       </span>
                     );
                   })}

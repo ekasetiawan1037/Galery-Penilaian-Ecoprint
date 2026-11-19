@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import express from 'express';
 import {
   BASE_ARTWORK_CATALOG,
+  type ArtworkGroup,
   type AssessmentSubmission,
   type DriveArchiveConfig,
   type GroupPasswordItem,
@@ -1586,6 +1587,41 @@ export function createApiApp(): express.Express {
       return;
     }
     db.submissions = db.submissions.filter((s) => s.evaluatorGroupId !== groupId);
+    await autoSyncManifestToDrive(db);
+    await saveDatabase(db);
+    res.json(await buildApiState(db));
+  });
+
+  app.post('/api/admin/lock-group', async (req, res) => {
+    const db = await loadDatabase();
+    if (!verifyAdminToken(extractToken(req), db)) {
+      res.status(401).json({ error: 'Akses ditolak. Silakan login sebagai Admin Guru.' });
+      return;
+    }
+    const { groupId } = req.body as { groupId?: string };
+    if (!groupId) {
+      res.status(400).json({ error: 'Kode kelompok wajib diisi.' });
+      return;
+    }
+    const catalog = buildCatalogWithOverrides(db.artworksMeta);
+    const group = catalog.find((g: ArtworkGroup) => g.groupId === groupId);
+    if (!group) {
+      res.status(404).json({ error: 'Kelompok tidak ditemukan.' });
+      return;
+    }
+    const existing = db.submissions.find((s) => s.evaluatorGroupId === groupId);
+    if (!existing) {
+      db.submissions.push({
+        evaluatorGroupId: group.groupId,
+        evaluatorClassName: group.className,
+        evaluatorGrade: group.grade,
+        votes: [],
+        submittedAt: new Date().toISOString(),
+        locked: true,
+      });
+    } else {
+      existing.locked = true;
+    }
     await autoSyncManifestToDrive(db);
     await saveDatabase(db);
     res.json(await buildApiState(db));
