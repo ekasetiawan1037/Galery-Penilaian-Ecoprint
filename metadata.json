@@ -1,0 +1,6 @@
+{
+  "name": "Galeri Penilaian Ecoprint Lintas Jenjang",
+  "description": "Sistem penilaian sebaya lintas kelas dan lintas jenjang (Cross-Grade Peer Assessment) karya Ecoprint kelas 7, 8, dan 9 beserta rekapitulasi pemenang otomatis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
