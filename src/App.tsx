@@ -9,6 +9,7 @@ import {
   SlidersHorizontal,
   Upload,
 } from 'lucide-react';
+import { AdminEditGroupModal } from './components/AdminEditGroupModal';
 import { AdminView } from './components/AdminView';
 import { ArtworkCard } from './components/ArtworkCard';
 import { ArtworkDetailModal } from './components/ArtworkDetailModal';
@@ -107,12 +108,14 @@ export default function App() {
   const [isSyncingDrive, setIsSyncingDrive] = useState(false);
   const [driveFolderFiles, setDriveFolderFiles] = useState<DriveUploadedFileInfo[]>([]);
   const syncingRef = useRef(false);
+  const initialAdminDrivePullDoneRef = useRef(false);
 
   // Modals
   const [groupSelectorOpen, setGroupSelectorOpen] = useState(false);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [printablePasswordsOpen, setPrintablePasswordsOpen] = useState(false);
   const [inspectedGroupId, setInspectedGroupId] = useState<string | null>(null);
+  const [editingGroupIdAdmin, setEditingGroupIdAdmin] = useState<string | null>(null);
 
   // Draft votes stored per evaluatorGroupId
   const [draftsByGroup, setDraftsByGroup] = useState<
@@ -272,6 +275,8 @@ export default function App() {
         const payload = (await res.json()) as {
           state?: ApiStateResponse;
           syncedCount?: number;
+          pulledGroupsCount?: number;
+          pulledVotesCount?: number;
           driveFiles?: DriveUploadedFileInfo[];
           error?: string;
           activationUrl?: string | null;
@@ -301,15 +306,34 @@ export default function App() {
         }
 
         const syncedCount = payload.syncedCount ?? 0;
+        const pulledGroups = payload.pulledGroupsCount ?? 0;
+        const pulledVotes = payload.pulledVotesCount ?? 0;
+        const hasPulled = pulledGroups > 0 || pulledVotes > 0;
+
         if (showToast) {
+          if (hasPulled || syncedCount > 0) {
+            const parts: string[] = [];
+            if (hasPulled) {
+              parts.push(
+                `${pulledGroups} data karya & ${pulledVotes} suara ditarik dari Drive`,
+              );
+            }
+            if (syncedCount > 0) {
+              parts.push(`${syncedCount} foto baru dikirim ke Drive`);
+            }
+            setToastMessage(
+              `Sinkronisasi "${TARGET_FOLDER_NAME}" selesai: ${parts.join(', ')}.`,
+            );
+          } else {
+            setToastMessage(
+              `Terhubung ke folder "${TARGET_FOLDER_NAME}". Seluruh data & foto sudah sinkron.`,
+            );
+          }
+        } else if (hasPulled || syncedCount > 0) {
           setToastMessage(
-            syncedCount > 0
-              ? `${syncedCount} foto ukuran asli tersimpan ke subfolder kelas di folder "${TARGET_FOLDER_NAME}".`
-              : `Terhubung ke folder "${TARGET_FOLDER_NAME}". Semua foto & rekap karya sudah tersinkron per kelas.`,
-          );
-        } else if (syncedCount > 0) {
-          setToastMessage(
-            `${syncedCount} foto baru otomatis tersimpan di folder "${TARGET_FOLDER_NAME}" sesuai kelas.`,
+            hasPulled
+              ? `Sinkronisasi otomatis: ${pulledGroups} data karya & ${pulledVotes} suara dipulihkan dari Drive${syncedCount > 0 ? `, ${syncedCount} foto baru dikirim.` : '.'}`
+              : `${syncedCount} foto baru otomatis tersimpan di folder "${TARGET_FOLDER_NAME}" sesuai kelas.`,
           );
         }
       } catch (err) {
@@ -327,6 +351,24 @@ export default function App() {
     [driveAccessToken, adminToken, driveUser?.email, applyApiState],
   );
 
+  // Auto-pull & sync from Google Drive once when Admin session + Drive token are both active
+  useEffect(() => {
+    if (!adminToken || !driveAccessToken) {
+      initialAdminDrivePullDoneRef.current = false;
+      return;
+    }
+    if (!initialAdminDrivePullDoneRef.current && !driveActivationUrl && !syncingRef.current) {
+      initialAdminDrivePullDoneRef.current = true;
+      syncPendingPhotosToDrive(driveAccessToken, driveUser?.email ?? null, false, false, false);
+    }
+  }, [
+    adminToken,
+    driveAccessToken,
+    driveUser?.email,
+    driveActivationUrl,
+    syncPendingPhotosToDrive,
+  ]);
+
   // Instant sync whenever a new artwork or group photo appears in catalog while teacher Drive is connected
   useEffect(() => {
     if (!adminToken || !driveAccessToken || driveActivationUrl) return;
@@ -343,7 +385,13 @@ export default function App() {
   // Live connected dashboard polling every 5s for ALL 52 student groups & teacher admin
   useEffect(() => {
     const interval = window.setInterval(async () => {
-      if (document.hidden || uploadModalOpen || groupSelectorOpen || isSubmitting) {
+      if (
+        document.hidden ||
+        uploadModalOpen ||
+        Boolean(editingGroupIdAdmin) ||
+        groupSelectorOpen ||
+        isSubmitting
+      ) {
         return;
       }
       try {
@@ -372,6 +420,7 @@ export default function App() {
     driveAccessToken,
     driveActivationUrl,
     uploadModalOpen,
+    editingGroupIdAdmin,
     groupSelectorOpen,
     isSubmitting,
     applyApiState,
@@ -575,6 +624,11 @@ export default function App() {
     [inspectedGroupId, catalog],
   );
 
+  const adminEditingGroup = useMemo(
+    () => (editingGroupIdAdmin ? getGroupById(editingGroupIdAdmin, catalog) ?? null : null),
+    [editingGroupIdAdmin, catalog],
+  );
+
   const lockedGroupIds = useMemo(
     () => new Set(submissions.map((s) => s.evaluatorGroupId)),
     [submissions],
@@ -626,16 +680,42 @@ export default function App() {
     setToastMessage('Anda telah keluar dari sesi kelompok.');
   };
 
-  const handleAdminLoginSuccess = (token: string) => {
+  const handleAdminLoginSuccess = (
+    token: string,
+    loginMeta?: {
+      autoPulled?: boolean;
+      pulledGroupsCount?: number;
+      pulledVotesCount?: number;
+      syncedCount?: number;
+      state?: unknown;
+    },
+  ) => {
     sessionStorage.setItem(ADMIN_TOKEN_KEY, token);
     setAdminToken(token);
-    setToastMessage('Berhasil masuk ke Panel Admin Guru.');
+    if (loginMeta?.state) {
+      applyApiState(loginMeta.state as ApiStateResponse);
+    }
+    if (loginMeta?.autoPulled) {
+      initialAdminDrivePullDoneRef.current = true;
+      const pulledG = loginMeta.pulledGroupsCount ?? 0;
+      const pulledV = loginMeta.pulledVotesCount ?? 0;
+      const synced = loginMeta.syncedCount ?? 0;
+      setToastMessage(
+        pulledG > 0 || pulledV > 0 || synced > 0
+          ? `Admin login & sinkron Drive otomatis: ${pulledG} karya dan ${pulledV} suara ditarik dari Drive${synced > 0 ? `, ${synced} foto diunggah` : ''}.`
+          : 'Berhasil masuk Panel Admin Guru & data Google Drive sudah sinkron.',
+      );
+    } else {
+      setToastMessage('Berhasil masuk ke Panel Admin Guru.');
+    }
   };
 
   const handleAdminLogout = () => {
     sessionStorage.removeItem(ADMIN_TOKEN_KEY);
     setAdminToken(null);
     setPrintablePasswordsOpen(false);
+    setEditingGroupIdAdmin(null);
+    initialAdminDrivePullDoneRef.current = false;
     setToastMessage('Anda telah keluar dari Panel Admin Guru.');
   };
 
@@ -931,6 +1011,7 @@ export default function App() {
             onSeedDemo={handleSeedDemo}
             onResetAll={handleResetAll}
             onUnlockGroup={handleUnlockGroup}
+            onEditGroup={(group) => setEditingGroupIdAdmin(group.groupId)}
           />
         ) : (
           <div className="space-y-8">
@@ -1205,6 +1286,15 @@ export default function App() {
         isOpen={printablePasswordsOpen}
         adminToken={adminToken}
         onClose={() => setPrintablePasswordsOpen(false)}
+      />
+
+      <AdminEditGroupModal
+        isOpen={Boolean(editingGroupIdAdmin)}
+        onClose={() => setEditingGroupIdAdmin(null)}
+        group={adminEditingGroup}
+        adminToken={adminToken}
+        onUpdated={(payload) => applyApiState(payload as ApiStateResponse)}
+        onSuccessToast={(msg) => setToastMessage(msg)}
       />
 
       <ArtworkDetailModal

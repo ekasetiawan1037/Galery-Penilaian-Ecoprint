@@ -36,6 +36,7 @@ export interface ArtworkMetadataOverride {
   fabric?: string;
   mordant?: string;
   description?: string;
+  metadataUpdatedAt?: string | null;
 }
 
 export type DriveOpenAccessStatus =

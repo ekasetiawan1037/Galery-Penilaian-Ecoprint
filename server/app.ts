@@ -21,8 +21,10 @@ import {
   listDriveFolderFilesRecursive,
   runFullDriveSync,
   ServerDriveApiError,
+  syncManifestViaAppsScriptWebhook,
   syncSingleGroupToDrive,
   uploadViaAppsScriptWebhook,
+  writeDriveManifestAndCsv,
 } from './driveSync.ts';
 import {
   type PersistedDatabase,
@@ -102,6 +104,56 @@ async function buildApiState(db: PersistedDatabase) {
     updatedAt: db.updatedAt,
     runtimeInfo: getStorageStatus(),
   };
+}
+
+async function autoSyncManifestToDrive(
+  db: PersistedDatabase,
+  driveTokenOverride?: string | null,
+): Promise<boolean> {
+  const activeSession = await getActiveDriveSession();
+  const accessToken = driveTokenOverride || activeSession?.accessToken || null;
+
+  if (accessToken) {
+    try {
+      db.driveConfig = await writeDriveManifestAndCsv({
+        accessToken,
+        driveConfig: db.driveConfig,
+        artworksMeta: db.artworksMeta,
+        submissions: db.submissions,
+        ownerEmail: activeSession?.ownerEmail ?? db.driveConfig.driveOwnerEmail,
+      });
+      return true;
+    } catch (err) {
+      if (err instanceof ServerDriveApiError && err.status === 401) {
+        await clearActiveDriveSession();
+      }
+      // Fallback to webhook if configured
+    }
+  }
+
+  const webhookUrl = db.driveConfig.driveWebhookUrl;
+  if (webhookUrl) {
+    try {
+      const hookRes = await syncManifestViaAppsScriptWebhook(webhookUrl, {
+        artworksMeta: db.artworksMeta,
+        submissions: db.submissions,
+        driveConfig: db.driveConfig,
+      });
+      db.driveConfig = {
+        ...db.driveConfig,
+        ...(hookRes.driveFolderId ? { driveFolderId: hookRes.driveFolderId } : {}),
+        ...(hookRes.driveFolderUrl ? { driveFolderUrl: hookRes.driveFolderUrl } : {}),
+        ...(hookRes.manifestFileId ? { manifestFileId: hookRes.manifestFileId } : {}),
+        ...(hookRes.csvFileId ? { csvFileId: hookRes.csvFileId } : {}),
+        lastSyncedAt: new Date().toISOString(),
+      };
+      return true;
+    } catch {
+      // Non-fatal: data remains safely stored in server DB
+    }
+  }
+
+  return false;
 }
 
 function buildPasswordList(db: PersistedDatabase): GroupPasswordItem[] {
@@ -221,7 +273,66 @@ export function createApiApp(): express.Express {
 
     const db = await loadDatabase();
     const token = signAdminToken(db.tokenSecret);
-    res.json({ token });
+
+    // Auto-pull & merge latest archive from Google Drive if an active Drive session exists
+    const headerDriveToken =
+      typeof req.headers['x-drive-token'] === 'string' &&
+      req.headers['x-drive-token'].trim()
+        ? req.headers['x-drive-token'].trim()
+        : null;
+    const activeDriveSession = await getActiveDriveSession();
+    const driveTokenToUse = headerDriveToken ?? activeDriveSession?.accessToken ?? null;
+
+    let autoPulled = false;
+    let pulledGroupsCount = 0;
+    let pulledVotesCount = 0;
+    let syncedCount = 0;
+
+    if (driveTokenToUse) {
+      try {
+        if (headerDriveToken) {
+          await setActiveDriveSession(
+            headerDriveToken,
+            activeDriveSession?.ownerEmail ?? db.driveConfig.driveOwnerEmail,
+          );
+        }
+        const syncResult = await runFullDriveSync({
+          accessToken: driveTokenToUse,
+          ownerEmail: activeDriveSession?.ownerEmail ?? db.driveConfig.driveOwnerEmail,
+          driveConfig: db.driveConfig,
+          artworksMeta: db.artworksMeta,
+          submissions: db.submissions,
+          readUploadedFileBuffer: async (gid, kind) => {
+            const data = await readUploadedFile(gid, kind);
+            return data ? { buffer: data.buffer, mimeType: data.mimeType } : null;
+          },
+          applyOpenAccess: false,
+          forceArchiveDocs: true,
+          pullFromDrive: true,
+        });
+        db.driveConfig = syncResult.driveConfig;
+        db.artworksMeta = syncResult.mergedArtworksMeta;
+        db.submissions = syncResult.mergedSubmissions;
+        pulledGroupsCount = syncResult.pulledGroupsCount;
+        pulledVotesCount = syncResult.pulledVotesCount;
+        syncedCount = syncResult.syncedItems.length;
+        autoPulled = true;
+        await saveDatabase(db);
+      } catch (err) {
+        if (err instanceof ServerDriveApiError && err.status === 401) {
+          await clearActiveDriveSession();
+        }
+      }
+    }
+
+    res.json({
+      token,
+      autoPulled,
+      pulledGroupsCount,
+      pulledVotesCount,
+      syncedCount,
+      state: await buildApiState(db),
+    });
   });
 
   app.get('/api/admin/session', async (req, res) => {
@@ -238,11 +349,13 @@ export function createApiApp(): express.Express {
   app.post('/api/artworks/:groupId/photo-chunk', async (req, res) => {
     const { groupId } = req.params;
     const db = await loadDatabase();
-    const verifiedGroupId = verifyGroupToken(extractToken(req), db);
+    const token = extractToken(req);
+    const verifiedGroupId = verifyGroupToken(token, db);
+    const isAdmin = verifyAdminToken(token, db);
 
-    if (!verifiedGroupId || verifiedGroupId !== groupId) {
+    if (!isAdmin && (!verifiedGroupId || verifiedGroupId !== groupId)) {
       res.status(401).json({
-        error: `Anda harus masuk menggunakan password Kelompok ${groupId}.`,
+        error: `Anda harus masuk menggunakan password Kelompok ${groupId} atau Admin Guru.`,
       });
       return;
     }
@@ -355,20 +468,39 @@ export function createApiApp(): express.Express {
     return { buffer, ext, mimeType: detectedMime, fileName };
   }
 
-  // Upload original-size artwork photo + group-with-artwork photo and/or edit metadata for the authenticated group.
-  // Writes FIRST to teacher's Google Drive when connected (active Drive session or Apps Script bridge), then saves local/Redis copy.
-  app.post('/api/artworks/:groupId/photo', async (req, res) => {
-    const { groupId } = req.params;
-    const db = await loadDatabase();
-    const verifiedGroupId = verifyGroupToken(extractToken(req), db);
+  interface ArtworkSaveBody {
+    imageDataUrl?: string;
+    uploadId?: string;
+    totalChunks?: number;
+    originalFileName?: string;
+    originalMimeType?: string;
+    groupImageDataUrl?: string;
+    groupUploadId?: string;
+    groupTotalChunks?: number;
+    groupOriginalFileName?: string;
+    groupOriginalMimeType?: string;
+    memberNames?: string;
+    artworkTitle?: string;
+    technique?: string;
+    leaves?: string;
+    fabric?: string;
+    mordant?: string;
+    description?: string;
+    driveFileId?: string | null;
+    driveWebViewLink?: string | null;
+    driveSyncedAt?: string | null;
+    driveFolderId?: string | null;
+    driveFolderUrl?: string | null;
+    driveOpenAccessStatus?: DriveArchiveConfig['driveOpenAccessStatus'];
+  }
 
-    if (!verifiedGroupId || verifiedGroupId !== groupId) {
-      res.status(401).json({
-        error: `Anda harus masuk menggunakan password Kelompok ${groupId} untuk mengedit karya atau mengupload foto ini.`,
-      });
-      return;
-    }
-
+  async function processGroupArtworkSave(params: {
+    db: PersistedDatabase;
+    groupId: string;
+    body: ArtworkSaveBody;
+    headerDriveToken: string | null;
+  }) {
+    const { db, groupId, body, headerDriveToken } = params;
     const {
       imageDataUrl,
       uploadId,
@@ -393,31 +525,7 @@ export function createApiApp(): express.Express {
       driveFolderId,
       driveFolderUrl,
       driveOpenAccessStatus,
-    } = req.body as {
-      imageDataUrl?: string;
-      uploadId?: string;
-      totalChunks?: number;
-      originalFileName?: string;
-      originalMimeType?: string;
-      groupImageDataUrl?: string;
-      groupUploadId?: string;
-      groupTotalChunks?: number;
-      groupOriginalFileName?: string;
-      groupOriginalMimeType?: string;
-      memberNames?: string;
-      artworkTitle?: string;
-      technique?: string;
-      leaves?: string;
-      fabric?: string;
-      mordant?: string;
-      description?: string;
-      driveFileId?: string | null;
-      driveWebViewLink?: string | null;
-      driveSyncedAt?: string | null;
-      driveFolderId?: string | null;
-      driveFolderUrl?: string | null;
-      driveOpenAccessStatus?: DriveArchiveConfig['driveOpenAccessStatus'];
-    };
+    } = body;
 
     const hasNewArtworkPhoto = Boolean(
       imageDataUrl || (uploadId && typeof totalChunks === 'number' && totalChunks > 0),
@@ -434,36 +542,30 @@ export function createApiApp(): express.Express {
       | { buffer: Buffer; ext: string; mimeType: string; fileName: string }
       | null = null;
 
-    try {
-      if (hasNewArtworkPhoto) {
-        decodedArtwork = await resolveIncomingImageBuffer({
-          groupId,
-          imageDataUrl,
-          uploadId,
-          totalChunks,
-          originalFileName,
-          originalMimeType,
-          defaultFileName: groupId,
-        });
-      }
-      if (hasNewGroupPhoto) {
-        decodedGroup = await resolveIncomingImageBuffer({
-          groupId,
-          imageDataUrl: groupImageDataUrl,
-          uploadId: groupUploadId,
-          totalChunks: groupTotalChunks,
-          originalFileName: groupOriginalFileName,
-          originalMimeType: groupOriginalMimeType,
-          defaultFileName: `${groupId}_kelompok`,
-        });
-      }
-    } catch (err) {
-      res.status(400).json({
-        error: err instanceof Error ? err.message : 'Gagal memproses file foto.',
+    if (hasNewArtworkPhoto) {
+      decodedArtwork = await resolveIncomingImageBuffer({
+        groupId,
+        imageDataUrl,
+        uploadId,
+        totalChunks,
+        originalFileName,
+        originalMimeType,
+        defaultFileName: groupId,
       });
-      return;
+    }
+    if (hasNewGroupPhoto) {
+      decodedGroup = await resolveIncomingImageBuffer({
+        groupId,
+        imageDataUrl: groupImageDataUrl,
+        uploadId: groupUploadId,
+        totalChunks: groupTotalChunks,
+        originalFileName: groupOriginalFileName,
+        originalMimeType: groupOriginalMimeType,
+        defaultFileName: `${groupId}_kelompok`,
+      });
     }
 
+    const nowIso = new Date().toISOString();
     const existingMeta = db.artworksMeta[groupId] ?? {};
     let photoUrl = existingMeta.photoUrl ?? null;
     let photoUpdatedAt = existingMeta.photoUpdatedAt ?? null;
@@ -483,6 +585,15 @@ export function createApiApp(): express.Express {
     let nextGroupDriveWebViewLink = existingMeta.groupDriveWebViewLink ?? null;
     let nextGroupDriveSyncedAt = existingMeta.groupDriveSyncedAt ?? null;
 
+    const hasMetadataEdit =
+      memberNames !== undefined ||
+      artworkTitle !== undefined ||
+      technique !== undefined ||
+      leaves !== undefined ||
+      fabric !== undefined ||
+      mordant !== undefined ||
+      description !== undefined;
+
     const mergedMetaDraft = {
       ...existingMeta,
       ...(memberNames !== undefined ? { memberNames: memberNames.slice(0, 160) } : {}),
@@ -492,6 +603,7 @@ export function createApiApp(): express.Express {
       ...(fabric !== undefined ? { fabric: fabric.slice(0, 60) } : {}),
       ...(mordant !== undefined ? { mordant: mordant.slice(0, 60) } : {}),
       ...(description !== undefined ? { description: description.slice(0, 260) } : {}),
+      ...(hasMetadataEdit ? { metadataUpdatedAt: nowIso } : {}),
     };
     const groupSnapshot =
       getGroupById(
@@ -505,11 +617,6 @@ export function createApiApp(): express.Express {
 
     // 1) WRITE TO TEACHER'S GOOGLE DRIVE FIRST (when Drive bridge/session or webhook is available)
     if (decodedArtwork || decodedGroup) {
-      const headerDriveToken =
-        typeof req.headers['x-drive-token'] === 'string' &&
-        req.headers['x-drive-token'].trim()
-          ? req.headers['x-drive-token'].trim()
-          : null;
       const activeDriveSession = await getActiveDriveSession();
       const driveTokenToUse = headerDriveToken ?? activeDriveSession?.accessToken ?? null;
 
@@ -633,7 +740,7 @@ export function createApiApp(): express.Express {
       );
       const storedDiskName = `${groupId}.${decodedArtwork.ext}`;
       photoUrl = `/uploads/${storedDiskName}?v=${ts}`;
-      photoUpdatedAt = new Date().toISOString();
+      photoUpdatedAt = nowIso;
       savedOriginalName = decodedArtwork.fileName;
       savedOriginalSize = decodedArtwork.buffer.byteLength;
       savedOriginalMime = decodedArtwork.mimeType;
@@ -655,7 +762,7 @@ export function createApiApp(): express.Express {
       );
       const storedGroupDiskName = `${groupId}_kelompok.${decodedGroup.ext}`;
       groupPhotoUrl = `/uploads/${storedGroupDiskName}?v=${ts}`;
-      groupPhotoUpdatedAt = new Date().toISOString();
+      groupPhotoUpdatedAt = nowIso;
       savedGroupOriginalName = decodedGroup.fileName;
       savedGroupOriginalSize = decodedGroup.buffer.byteLength;
       savedGroupOriginalMime = decodedGroup.mimeType;
@@ -673,7 +780,7 @@ export function createApiApp(): express.Express {
         driveFolderId,
         driveFolderUrl,
         ...(driveOpenAccessStatus !== undefined ? { driveOpenAccessStatus } : {}),
-        lastSyncedAt: new Date().toISOString(),
+        lastSyncedAt: nowIso,
       };
     }
 
@@ -697,34 +804,29 @@ export function createApiApp(): express.Express {
       groupDriveSyncedAt: nextGroupDriveSyncedAt,
     };
 
+    // 4) Auto-write complete manifest & CSV snapshot to Google Drive when connected
+    const manifestSynced = await autoSyncManifestToDrive(db, headerDriveToken);
+    if (!decodedArtwork && !decodedGroup && manifestSynced) {
+      driveSyncStatus = 'synced';
+      driveSyncMessage = 'Perubahan data kelompok otomatis disinkronkan ke Google Drive.';
+    }
+
     await saveDatabase(db);
-    res.json({
+    return {
       state: await buildApiState(db),
       driveSyncStatus,
       driveSyncMessage,
-    });
-  });
+    };
+  }
 
-  app.delete('/api/artworks/:groupId/photo', async (req, res) => {
-    const { groupId } = req.params;
-    const rawKind = typeof req.query.kind === 'string' ? req.query.kind : 'all';
-    const targetKind: PhotoKind | 'all' =
-      rawKind === 'artwork' || rawKind === 'group' ? rawKind : 'all';
-
-    const db = await loadDatabase();
-    const verifiedGroupId = verifyGroupToken(extractToken(req), db);
-
-    if (!verifiedGroupId || verifiedGroupId !== groupId) {
-      res.status(401).json({
-        error: `Anda harus masuk menggunakan password Kelompok ${groupId} untuk menghapus foto ini.`,
-      });
-      return;
-    }
-
+  async function processGroupPhotoDelete(params: {
+    db: PersistedDatabase;
+    groupId: string;
+    targetKind: PhotoKind | 'all';
+    headerDriveToken: string | null;
+  }) {
+    const { db, groupId, targetKind, headerDriveToken } = params;
     const existingMeta = db.artworksMeta[groupId] ?? {};
-    const driveHeader = req.headers['x-drive-token'];
-    const headerDriveToken =
-      typeof driveHeader === 'string' && driveHeader.trim() ? driveHeader.trim() : null;
     const sessionDrive = await getActiveDriveSession();
     const driveToken = headerDriveToken ?? sessionDrive?.accessToken ?? null;
 
@@ -739,7 +841,7 @@ export function createApiApp(): express.Express {
 
     await deleteUploadedFile(groupId, targetKind);
 
-    const nextMeta = { ...existingMeta };
+    const nextMeta = { ...existingMeta, metadataUpdatedAt: new Date().toISOString() };
     if (targetKind === 'all' || targetKind === 'artwork') {
       nextMeta.photoUrl = null;
       nextMeta.photoUpdatedAt = null;
@@ -762,9 +864,149 @@ export function createApiApp(): express.Express {
     }
 
     db.artworksMeta[groupId] = nextMeta;
+    await autoSyncManifestToDrive(db, headerDriveToken);
     await saveDatabase(db);
 
-    res.json({ state: await buildApiState(db) });
+    return { state: await buildApiState(db) };
+  }
+
+  // Upload original-size artwork photo + group-with-artwork photo and/or edit metadata for the authenticated group.
+  // Writes FIRST to teacher's Google Drive when connected (active Drive session or Apps Script bridge), then saves local/Redis copy.
+  app.post('/api/artworks/:groupId/photo', async (req, res) => {
+    const { groupId } = req.params;
+    if (!getGroupById(groupId)) {
+      res.status(404).json({ error: 'Kelompok tidak ditemukan.' });
+      return;
+    }
+
+    const db = await loadDatabase();
+    const verifiedGroupId = verifyGroupToken(extractToken(req), db);
+
+    if (!verifiedGroupId || verifiedGroupId !== groupId) {
+      res.status(401).json({
+        error: `Anda harus masuk menggunakan password Kelompok ${groupId} untuk mengedit karya atau mengupload foto ini.`,
+      });
+      return;
+    }
+
+    const headerDriveToken =
+      typeof req.headers['x-drive-token'] === 'string' &&
+      req.headers['x-drive-token'].trim()
+        ? req.headers['x-drive-token'].trim()
+        : null;
+
+    try {
+      const result = await processGroupArtworkSave({
+        db,
+        groupId,
+        body: req.body as ArtworkSaveBody,
+        headerDriveToken,
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'Gagal memproses file foto.',
+      });
+    }
+  });
+
+  app.delete('/api/artworks/:groupId/photo', async (req, res) => {
+    const { groupId } = req.params;
+    if (!getGroupById(groupId)) {
+      res.status(404).json({ error: 'Kelompok tidak ditemukan.' });
+      return;
+    }
+
+    const rawKind = typeof req.query.kind === 'string' ? req.query.kind : 'all';
+    const targetKind: PhotoKind | 'all' =
+      rawKind === 'artwork' || rawKind === 'group' ? rawKind : 'all';
+
+    const db = await loadDatabase();
+    const verifiedGroupId = verifyGroupToken(extractToken(req), db);
+
+    if (!verifiedGroupId || verifiedGroupId !== groupId) {
+      res.status(401).json({
+        error: `Anda harus masuk menggunakan password Kelompok ${groupId} untuk menghapus foto ini.`,
+      });
+      return;
+    }
+
+    const driveHeader = req.headers['x-drive-token'];
+    const headerDriveToken =
+      typeof driveHeader === 'string' && driveHeader.trim() ? driveHeader.trim() : null;
+
+    const result = await processGroupPhotoDelete({
+      db,
+      groupId,
+      targetKind,
+      headerDriveToken,
+    });
+    res.json(result);
+  });
+
+  // Admin endpoints to edit ANY group's name, title, leaves, description, and both original photos
+  app.post('/api/admin/artworks/:groupId', async (req, res) => {
+    const { groupId } = req.params;
+    if (!getGroupById(groupId)) {
+      res.status(404).json({ error: 'Kelompok tidak ditemukan.' });
+      return;
+    }
+
+    const db = await loadDatabase();
+    if (!verifyAdminToken(extractToken(req), db)) {
+      res.status(401).json({ error: 'Akses ditolak. Silakan login sebagai Admin Guru.' });
+      return;
+    }
+
+    const headerDriveToken =
+      typeof req.headers['x-drive-token'] === 'string' &&
+      req.headers['x-drive-token'].trim()
+        ? req.headers['x-drive-token'].trim()
+        : null;
+
+    try {
+      const result = await processGroupArtworkSave({
+        db,
+        groupId,
+        body: req.body as ArtworkSaveBody,
+        headerDriveToken,
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'Gagal menyimpan perubahan karya oleh Admin.',
+      });
+    }
+  });
+
+  app.delete('/api/admin/artworks/:groupId/photo', async (req, res) => {
+    const { groupId } = req.params;
+    if (!getGroupById(groupId)) {
+      res.status(404).json({ error: 'Kelompok tidak ditemukan.' });
+      return;
+    }
+
+    const db = await loadDatabase();
+    if (!verifyAdminToken(extractToken(req), db)) {
+      res.status(401).json({ error: 'Akses ditolak. Silakan login sebagai Admin Guru.' });
+      return;
+    }
+
+    const rawKind = typeof req.query.kind === 'string' ? req.query.kind : 'all';
+    const targetKind: PhotoKind | 'all' =
+      rawKind === 'artwork' || rawKind === 'group' ? rawKind : 'all';
+
+    const driveHeader = req.headers['x-drive-token'];
+    const headerDriveToken =
+      typeof driveHeader === 'string' && driveHeader.trim() ? driveHeader.trim() : null;
+
+    const result = await processGroupPhotoDelete({
+      db,
+      groupId,
+      targetKind,
+      headerDriveToken,
+    });
+    res.json(result);
   });
 
   // Serve uploaded artwork & group photos seamlessly across disk/tmp and Upstash Redis
@@ -928,47 +1170,32 @@ export function createApiApp(): express.Express {
 
     try {
       await setActiveDriveSession(driveAccessToken, ownerEmail ?? db.driveConfig.driveOwnerEmail);
-      const catalog = buildCatalogWithOverrides(db.artworksMeta);
-      const recapitulation = computeRecapitulation(db.submissions, catalog);
 
       const syncResult = await runFullDriveSync({
         accessToken: driveAccessToken,
         ownerEmail,
         driveConfig: db.driveConfig,
-        catalog,
-        recapitulation,
+        artworksMeta: db.artworksMeta,
+        submissions: db.submissions,
         readUploadedFileBuffer: async (gid, kind) => {
           const data = await readUploadedFile(gid, kind);
           return data ? { buffer: data.buffer, mimeType: data.mimeType } : null;
         },
         applyOpenAccess,
         forceArchiveDocs,
+        pullFromDrive: true,
       });
 
       db.driveConfig = syncResult.driveConfig;
-      for (const item of syncResult.syncedItems) {
-        const prev = db.artworksMeta[item.groupId] ?? {};
-        if (item.kind === 'group') {
-          db.artworksMeta[item.groupId] = {
-            ...prev,
-            groupDriveFileId: item.driveFileId,
-            groupDriveWebViewLink: item.driveWebViewLink,
-            groupDriveSyncedAt: item.driveSyncedAt,
-          };
-        } else {
-          db.artworksMeta[item.groupId] = {
-            ...prev,
-            driveFileId: item.driveFileId,
-            driveWebViewLink: item.driveWebViewLink,
-            driveSyncedAt: item.driveSyncedAt,
-          };
-        }
-      }
+      db.artworksMeta = syncResult.mergedArtworksMeta;
+      db.submissions = syncResult.mergedSubmissions;
       await saveDatabase(db);
 
       res.json({
         state: await buildApiState(db),
         syncedCount: syncResult.syncedItems.length,
+        pulledGroupsCount: syncResult.pulledGroupsCount,
+        pulledVotesCount: syncResult.pulledVotesCount,
         driveFiles: syncResult.driveFiles,
         openAccessMessage: syncResult.openAccessMessage ?? null,
       });
@@ -986,6 +1213,72 @@ export function createApiApp(): express.Express {
       }
       res.status(500).json({
         error: err instanceof Error ? err.message : 'Gagal menyinkronkan ke Google Drive.',
+      });
+    }
+  });
+
+  app.post('/api/admin/drive-pull', async (req, res) => {
+    const db = await loadDatabase();
+    if (!verifyAdminToken(extractToken(req), db)) {
+      res.status(401).json({ error: 'Akses ditolak. Silakan login Admin Guru.' });
+      return;
+    }
+
+    const driveTokenHeader = req.headers['x-drive-token'];
+    const headerToken =
+      typeof driveTokenHeader === 'string' ? driveTokenHeader.trim() : '';
+    const activeSession = await getActiveDriveSession();
+    const driveAccessToken = headerToken || activeSession?.accessToken || '';
+
+    if (!driveAccessToken) {
+      res.status(400).json({
+        error: 'Token Google Drive tidak tersedia. Silakan Sign in with Google.',
+      });
+      return;
+    }
+
+    try {
+      const syncResult = await runFullDriveSync({
+        accessToken: driveAccessToken,
+        ownerEmail: activeSession?.ownerEmail ?? db.driveConfig.driveOwnerEmail,
+        driveConfig: db.driveConfig,
+        artworksMeta: db.artworksMeta,
+        submissions: db.submissions,
+        readUploadedFileBuffer: async (gid, kind) => {
+          const data = await readUploadedFile(gid, kind);
+          return data ? { buffer: data.buffer, mimeType: data.mimeType } : null;
+        },
+        applyOpenAccess: false,
+        forceArchiveDocs: false,
+        pullFromDrive: true,
+      });
+
+      db.driveConfig = syncResult.driveConfig;
+      db.artworksMeta = syncResult.mergedArtworksMeta;
+      db.submissions = syncResult.mergedSubmissions;
+      await saveDatabase(db);
+
+      res.json({
+        state: await buildApiState(db),
+        pulledGroupsCount: syncResult.pulledGroupsCount,
+        pulledVotesCount: syncResult.pulledVotesCount,
+        syncedCount: syncResult.syncedItems.length,
+        driveFiles: syncResult.driveFiles,
+      });
+    } catch (err) {
+      if (err instanceof ServerDriveApiError && err.status === 401) {
+        await clearActiveDriveSession();
+      }
+      if (err instanceof ServerDriveApiError) {
+        res.status(err.status >= 400 && err.status < 600 ? err.status : 500).json({
+          error: err.message,
+          reason: err.reason ?? null,
+          activationUrl: err.activationUrl ?? null,
+        });
+        return;
+      }
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Gagal menarik data dari Google Drive.',
       });
     }
   });
@@ -1220,6 +1513,7 @@ export function createApiApp(): express.Express {
       false,
     );
     db.submissions.push(lockedSubmission);
+    await autoSyncManifestToDrive(db);
     await saveDatabase(db);
 
     res.status(201).json({
@@ -1263,6 +1557,7 @@ export function createApiApp(): express.Express {
     const count =
       typeof req.body?.count === 'number' ? Math.min(20, Math.max(1, req.body.count)) : 10;
     db.submissions = generateAdditionalDemoSubmissions(db.submissions, count);
+    await autoSyncManifestToDrive(db);
     await saveDatabase(db);
     res.json(await buildApiState(db));
   });
@@ -1274,6 +1569,7 @@ export function createApiApp(): express.Express {
       return;
     }
     db.submissions = [];
+    await autoSyncManifestToDrive(db);
     await saveDatabase(db);
     res.json(await buildApiState(db));
   });
@@ -1290,6 +1586,7 @@ export function createApiApp(): express.Express {
       return;
     }
     db.submissions = db.submissions.filter((s) => s.evaluatorGroupId !== groupId);
+    await autoSyncManifestToDrive(db);
     await saveDatabase(db);
     res.json(await buildApiState(db));
   });

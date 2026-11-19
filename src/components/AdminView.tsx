@@ -16,6 +16,7 @@ import {
   Link2,
   Lock,
   LogOut,
+  Pencil,
   Printer,
   RefreshCw,
   ShieldCheck,
@@ -57,7 +58,16 @@ interface AdminViewProps {
   isSyncingDrive: boolean;
   driveFolderFiles: DriveUploadedFileInfo[];
   isBusy: boolean;
-  onAdminLoginSuccess: (token: string) => void;
+  onAdminLoginSuccess: (
+    token: string,
+    loginMeta?: {
+      autoPulled?: boolean;
+      pulledGroupsCount?: number;
+      pulledVotesCount?: number;
+      syncedCount?: number;
+      state?: unknown;
+    },
+  ) => void;
   onAdminLogout: () => void;
   onGoogleDriveSignIn: () => Promise<void>;
   onGoogleDriveSignOut: () => Promise<void>;
@@ -70,6 +80,7 @@ interface AdminViewProps {
   onSeedDemo: () => Promise<void>;
   onResetAll: () => Promise<void>;
   onUnlockGroup: (groupId: string) => Promise<void>;
+  onEditGroup: (group: ArtworkGroup) => void;
 }
 
 const TEACHER_EXPECTED_EMAIL = 'eka.setiawan1037@guru.smp.belajar.id';
@@ -82,13 +93,42 @@ function formatBytes(bytes?: number | string | null): string {
   return `${(num / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-const APPS_SCRIPT_TEMPLATE = `function doPost(e) {
+function upsertDriveTextDocHelper() {
+  return `function upsertTextDoc_(folder, name, mimeType, content) {
+  var existing = folder.getFilesByName(name);
+  var file;
+  if (existing.hasNext()) {
+    file = existing.next();
+    file.setContent(content);
+  } else {
+    file = folder.createFile(name, content, mimeType);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  }
+  return file.getId();
+}`;
+}
+
+const APPS_SCRIPT_TEMPLATE = `${upsertDriveTextDocHelper()}
+
+function doPost(e) {
   try {
     var payload = JSON.parse(e.postData.contents);
     var rootName = payload.folderName || 'galery penilaian Ecoprint';
     var rootIter = DriveApp.getFoldersByName(rootName);
     var root = rootIter.hasNext() ? rootIter.next() : DriveApp.createFolder(rootName);
     root.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+    if (payload.action === 'sync_manifest') {
+      var manifestId = upsertTextDoc_(root, payload.manifestFileName || 'ecoprint-arsip-manifest.json', 'application/json', payload.manifestContent || '{}');
+      var csvId = upsertTextDoc_(root, payload.csvFileName || 'Rekap_Karya_Ecoprint.csv', 'text/csv', payload.csvContent || '');
+      return ContentService.createTextOutput(JSON.stringify({
+        ok: true,
+        folderId: root.getId(),
+        folderUrl: root.getUrl(),
+        manifestFileId: manifestId,
+        csvFileId: csvId
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
 
     var clsName = payload.classFolderName || ('Kelas ' + payload.className);
     var subIter = root.getFoldersByName(clsName);
@@ -141,6 +181,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
   onSeedDemo,
   onResetAll,
   onUnlockGroup,
+  onEditGroup,
 }) => {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -202,7 +243,10 @@ export const AdminView: React.FC<AdminViewProps> = ({
     try {
       const res = await fetch('/api/admin/login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(driveAccessToken ? { 'X-Drive-Token': driveAccessToken } : {}),
+        },
         body: JSON.stringify({ password: password.trim() }),
       });
       const data = await res.json();
@@ -211,7 +255,13 @@ export const AdminView: React.FC<AdminViewProps> = ({
         return;
       }
       setPassword('');
-      onAdminLoginSuccess(data.token);
+      onAdminLoginSuccess(data.token, {
+        autoPulled: data.autoPulled,
+        pulledGroupsCount: data.pulledGroupsCount,
+        pulledVotesCount: data.pulledVotesCount,
+        syncedCount: data.syncedCount,
+        state: data.state,
+      });
     } catch {
       setLoginError('Gagal menghubungi server.');
     } finally {
@@ -766,6 +816,14 @@ export const AdminView: React.FC<AdminViewProps> = ({
                         </td>
                         <td className="py-3 px-4 text-right whitespace-nowrap">
                           <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => onEditGroup(art)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-[#E3DED4] bg-white text-[#1A1917] hover:bg-[#F0EDE6] font-medium transition-colors"
+                            >
+                              <Pencil className="w-3 h-3" aria-hidden="true" />
+                              <span>Edit</span>
+                            </button>
                             {art.photoUrl && (
                               <a
                                 href={`/api/artworks/${encodeURIComponent(art.groupId)}/download-original?kind=artwork`}
@@ -916,17 +974,27 @@ export const AdminView: React.FC<AdminViewProps> = ({
                         key={group.groupId}
                         className="p-3 rounded-lg border border-[#E3DED4] bg-[#FAF9F6] flex flex-col justify-between gap-2"
                       >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-mono text-sm font-semibold text-[#1A1917] tabular-nums">
-                            {group.groupId}
-                          </span>
-                          {isLocked ? (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#1B4332]">
-                              <Lock className="w-3 h-3" aria-hidden="true" />
-                              <span>Terkunci</span>
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-mono text-sm font-semibold text-[#1A1917] tabular-nums">
+                              {group.groupId}
                             </span>
-                          ) : (
-                            <span className="text-[11px] text-[#8A8479]">Belum menilai</span>
+                            {isLocked ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#1B4332]">
+                                <Lock className="w-3 h-3" aria-hidden="true" />
+                                <span>Terkunci</span>
+                              </span>
+                            ) : (
+                              <span className="text-[11px] text-[#8A8479]">Belum menilai</span>
+                            )}
+                          </div>
+                          <div className="text-xs font-medium text-[#1A1917] truncate">
+                            {group.artworkTitle}
+                          </div>
+                          {group.memberNames && (
+                            <div className="text-[11px] text-[#1B4332] truncate">
+                              {group.memberNames}
+                            </div>
                           )}
                         </div>
 
@@ -962,17 +1030,29 @@ export const AdminView: React.FC<AdminViewProps> = ({
                           )}
                         </div>
 
-                        {isLocked && (
+                        <div className="flex flex-col gap-1.5 mt-1">
                           <button
                             type="button"
                             disabled={isBusy}
-                            onClick={() => onUnlockGroup(group.groupId)}
-                            className="mt-1 inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded border border-[#E3DED4] bg-white hover:bg-[#FEF2F2] hover:border-[#FECACA] text-[11px] font-medium text-[#991B1B] transition-colors"
+                            onClick={() => onEditGroup(group)}
+                            className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded border border-[#E3DED4] bg-white hover:bg-[#F0EDE6] text-[11px] font-medium text-[#1A1917] transition-colors"
                           >
-                            <Unlock className="w-3 h-3" aria-hidden="true" />
-                            <span>Buka Kunci Penilaian</span>
+                            <Pencil className="w-3 h-3" aria-hidden="true" />
+                            <span>Edit Nama, Deskripsi &amp; Foto</span>
                           </button>
-                        )}
+
+                          {isLocked && (
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => onUnlockGroup(group.groupId)}
+                              className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded border border-[#E3DED4] bg-white hover:bg-[#FEF2F2] hover:border-[#FECACA] text-[11px] font-medium text-[#991B1B] transition-colors"
+                            >
+                              <Unlock className="w-3 h-3" aria-hidden="true" />
+                              <span>Buka Kunci Penilaian</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
                     );
                   })}

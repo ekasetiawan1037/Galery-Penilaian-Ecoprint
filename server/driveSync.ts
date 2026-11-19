@@ -1,5 +1,10 @@
 import {
+  ALL_CLASSES,
+  buildCatalogWithOverrides,
+  computeRecapitulation,
   type ArtworkGroup,
+  type ArtworkMetadataOverride,
+  type AssessmentSubmission,
   type DriveArchiveConfig,
   type DriveOpenAccessStatus,
   type PhotoKind,
@@ -840,20 +845,526 @@ export async function uploadViaAppsScriptWebhook(
   };
 }
 
+export interface DriveArchiveManifest {
+  version?: number;
+  folderName: string;
+  updatedAt: string;
+  driveFolderId?: string;
+  driveFolderUrl?: string;
+  classFolderIds?: Record<string, string>;
+  submissions?: AssessmentSubmission[];
+  artworks?: Array<{
+    groupId: string;
+    className?: string;
+    grade?: number;
+    memberNames?: string;
+    artworkTitle?: string;
+    leaves?: string;
+    technique?: string;
+    fabric?: string;
+    mordant?: string;
+    description?: string;
+    metadataUpdatedAt?: string | null;
+    photoUrl?: string | null;
+    photoUpdatedAt?: string | null;
+    originalFileName?: string | null;
+    originalFileSize?: number | null;
+    originalMimeType?: string | null;
+    driveFileId?: string | null;
+    driveWebViewLink?: string | null;
+    driveSyncedAt?: string | null;
+    groupPhotoUrl?: string | null;
+    groupPhotoUpdatedAt?: string | null;
+    groupOriginalFileName?: string | null;
+    groupOriginalFileSize?: number | null;
+    groupOriginalMimeType?: string | null;
+    groupDriveFileId?: string | null;
+    groupDriveWebViewLink?: string | null;
+    groupDriveSyncedAt?: string | null;
+  }>;
+}
+
+export async function discoverClassSubfolders(
+  accessToken: string,
+  rootFolderId: string,
+  existingClassFolderIds: Record<string, string> = {},
+): Promise<Record<string, string>> {
+  const base = getDriveApiBase();
+  const nextIds: Record<string, string> = { ...existingClassFolderIds };
+  try {
+    const q = encodeURIComponent(
+      `'${rootFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    );
+    const res = await fetch(
+      `${base}/drive/v3/files?q=${q}&pageSize=50&fields=files(id,name)`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    if (!res.ok) return nextIds;
+    const data = (await res.json()) as {
+      files?: Array<{ id: string; name: string }>;
+    };
+    const classNamesSet = new Set(ALL_CLASSES.map((c) => c.className));
+    for (const f of data.files ?? []) {
+      const m = f.name.match(/^Kelas\s+(\d{2})$/i);
+      if (m && classNamesSet.has(m[1])) {
+        nextIds[m[1]] = f.id;
+      }
+    }
+  } catch {
+    // Non-fatal
+  }
+  return nextIds;
+}
+
+export async function readDriveManifestSnapshot(
+  accessToken: string,
+  rootFolderId: string,
+  existingManifestFileId?: string | null,
+): Promise<{ manifest: DriveArchiveManifest | null; manifestFileId: string | null }> {
+  const base = getDriveApiBase();
+  let fileId = existingManifestFileId ?? null;
+
+  if (fileId) {
+    try {
+      const res = await fetch(
+        `${base}/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      );
+      if (res.ok) {
+        const parsed = (await res.json()) as DriveArchiveManifest;
+        return { manifest: parsed, manifestFileId: fileId };
+      }
+    } catch {
+      fileId = null;
+    }
+  }
+
+  try {
+    const q = encodeURIComponent(
+      `'${rootFolderId}' in parents and name='${MANIFEST_FILE_NAME}' and trashed=false`,
+    );
+    const searchRes = await fetch(
+      `${base}/drive/v3/files?q=${q}&orderBy=modifiedTime desc&pageSize=5&fields=files(id,name)`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    if (!searchRes.ok) return { manifest: null, manifestFileId: fileId };
+    const searchData = (await searchRes.json()) as {
+      files?: Array<{ id: string; name: string }>;
+    };
+    const foundId = searchData.files?.[0]?.id;
+    if (!foundId) return { manifest: null, manifestFileId: null };
+
+    const downloadRes = await fetch(
+      `${base}/drive/v3/files/${encodeURIComponent(foundId)}?alt=media`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    if (!downloadRes.ok) return { manifest: null, manifestFileId: foundId };
+    const parsed = (await downloadRes.json()) as DriveArchiveManifest;
+    return { manifest: parsed, manifestFileId: foundId };
+  } catch {
+    return { manifest: null, manifestFileId: fileId };
+  }
+}
+
+function parseTimestamp(iso?: string | null): number {
+  if (!iso) return 0;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+export function mergeDriveDataIntoState(params: {
+  localArtworksMeta: Record<string, ArtworkMetadataOverride>;
+  localSubmissions: AssessmentSubmission[];
+  remoteManifest: DriveArchiveManifest | null;
+  remoteDriveFiles: DriveFileSummary[];
+}): {
+  mergedArtworksMeta: Record<string, ArtworkMetadataOverride>;
+  mergedSubmissions: AssessmentSubmission[];
+  pulledGroupsCount: number;
+  pulledVotesCount: number;
+} {
+  const {
+    localArtworksMeta,
+    localSubmissions,
+    remoteManifest,
+    remoteDriveFiles,
+  } = params;
+
+  const mergedMeta: Record<string, ArtworkMetadataOverride> = {};
+  for (const [k, v] of Object.entries(localArtworksMeta)) {
+    mergedMeta[k] = { ...v };
+  }
+
+  let pulledGroupsCount = 0;
+  const remoteUpdatedMs = parseTimestamp(remoteManifest?.updatedAt);
+
+  // 1) Merge metadata & Drive links from remote Drive manifest
+  for (const item of remoteManifest?.artworks ?? []) {
+    if (!item?.groupId) continue;
+    const local = mergedMeta[item.groupId] ?? {};
+    const next: ArtworkMetadataOverride = { ...local };
+    let changedFromDrive = false;
+
+    const remoteMetaMs =
+      parseTimestamp(item.metadataUpdatedAt) || remoteUpdatedMs;
+    const localMetaMs = parseTimestamp(local.metadataUpdatedAt);
+
+    // Pull descriptive text fields if server doesn't have custom overrides OR Drive snapshot is strictly newer
+    const hasLocalCustomMeta = Boolean(
+      local.metadataUpdatedAt ||
+        local.memberNames ||
+        local.artworkTitle ||
+        local.leaves ||
+        local.description,
+    );
+    const shouldTakeRemoteText =
+      !hasLocalCustomMeta || (remoteMetaMs > 0 && remoteMetaMs > localMetaMs);
+
+    if (shouldTakeRemoteText) {
+      if (item.memberNames !== undefined && item.memberNames !== local.memberNames) {
+        next.memberNames = item.memberNames;
+        changedFromDrive = true;
+      }
+      if (item.artworkTitle && item.artworkTitle !== local.artworkTitle) {
+        next.artworkTitle = item.artworkTitle;
+        changedFromDrive = true;
+      }
+      if (item.leaves && item.leaves !== local.leaves) {
+        next.leaves = item.leaves;
+        changedFromDrive = true;
+      }
+      if (item.technique && item.technique !== local.technique) {
+        next.technique = item.technique;
+        changedFromDrive = true;
+      }
+      if (item.fabric && item.fabric !== local.fabric) {
+        next.fabric = item.fabric;
+        changedFromDrive = true;
+      }
+      if (item.mordant && item.mordant !== local.mordant) {
+        next.mordant = item.mordant;
+        changedFromDrive = true;
+      }
+      if (item.description && item.description !== local.description) {
+        next.description = item.description;
+        changedFromDrive = true;
+      }
+      if (item.metadataUpdatedAt || changedFromDrive) {
+        next.metadataUpdatedAt = item.metadataUpdatedAt ?? remoteManifest?.updatedAt ?? null;
+      }
+    }
+
+    // Pull Foto Karya Drive pointers if missing locally (or Drive photo is newer and local doesn't have an unsynced upload)
+    const hasUnsyncedLocalArtwork = Boolean(local.photoUrl && !local.driveFileId);
+    const remoteArtPhotoMs = parseTimestamp(item.photoUpdatedAt || item.driveSyncedAt);
+    const localArtPhotoMs = parseTimestamp(local.photoUpdatedAt || local.driveSyncedAt);
+
+    if (
+      item.driveFileId &&
+      !hasUnsyncedLocalArtwork &&
+      (!local.driveFileId || remoteArtPhotoMs > localArtPhotoMs)
+    ) {
+      if (next.driveFileId !== item.driveFileId) {
+        changedFromDrive = true;
+      }
+      next.driveFileId = item.driveFileId;
+      next.driveWebViewLink =
+        item.driveWebViewLink || `https://drive.google.com/file/d/${item.driveFileId}/view`;
+      next.driveSyncedAt = item.driveSyncedAt ?? remoteManifest?.updatedAt ?? null;
+      if (item.originalFileName) next.originalFileName = item.originalFileName;
+      if (item.originalFileSize) next.originalFileSize = item.originalFileSize;
+      if (item.originalMimeType) next.originalMimeType = item.originalMimeType;
+      if (item.photoUpdatedAt && !next.photoUpdatedAt) {
+        next.photoUpdatedAt = item.photoUpdatedAt;
+      }
+    }
+
+    // Pull Foto Kelompok Drive pointers if missing locally
+    const hasUnsyncedLocalGroup = Boolean(local.groupPhotoUrl && !local.groupDriveFileId);
+    const remoteGrpPhotoMs = parseTimestamp(
+      item.groupPhotoUpdatedAt || item.groupDriveSyncedAt,
+    );
+    const localGrpPhotoMs = parseTimestamp(
+      local.groupPhotoUpdatedAt || local.groupDriveSyncedAt,
+    );
+
+    if (
+      item.groupDriveFileId &&
+      !hasUnsyncedLocalGroup &&
+      (!local.groupDriveFileId || remoteGrpPhotoMs > localGrpPhotoMs)
+    ) {
+      if (next.groupDriveFileId !== item.groupDriveFileId) {
+        changedFromDrive = true;
+      }
+      next.groupDriveFileId = item.groupDriveFileId;
+      next.groupDriveWebViewLink =
+        item.groupDriveWebViewLink ||
+        `https://drive.google.com/file/d/${item.groupDriveFileId}/view`;
+      next.groupDriveSyncedAt = item.groupDriveSyncedAt ?? remoteManifest?.updatedAt ?? null;
+      if (item.groupOriginalFileName) next.groupOriginalFileName = item.groupOriginalFileName;
+      if (item.groupOriginalFileSize) next.groupOriginalFileSize = item.groupOriginalFileSize;
+      if (item.groupOriginalMimeType) next.groupOriginalMimeType = item.groupOriginalMimeType;
+      if (item.groupPhotoUpdatedAt && !next.groupPhotoUpdatedAt) {
+        next.groupPhotoUpdatedAt = item.groupPhotoUpdatedAt;
+      }
+    }
+
+    if (changedFromDrive) {
+      pulledGroupsCount++;
+      mergedMeta[item.groupId] = next;
+    } else if (Object.keys(next).length > 0) {
+      mergedMeta[item.groupId] = next;
+    }
+  }
+
+  // 2) Also scan actual binary files directly in Drive folders (in case files exist without manifest entry)
+  for (const f of remoteDriveFiles) {
+    const match = f.name.match(/^(\d{2}-\d+)_Kls\d{2}_(KARYA|KELOMPOK)_/i);
+    if (!match) continue;
+    const groupId = match[1];
+    const kindTag = match[2].toUpperCase();
+    const current = mergedMeta[groupId] ?? {};
+
+    if (kindTag === 'KARYA' && !current.driveFileId && !current.photoUrl) {
+      mergedMeta[groupId] = {
+        ...current,
+        driveFileId: f.id,
+        driveWebViewLink: f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`,
+        driveSyncedAt: f.createdTime ?? new Date().toISOString(),
+        originalFileName: current.originalFileName ?? f.name,
+        originalFileSize: current.originalFileSize ?? (f.size ? Number(f.size) : null),
+        originalMimeType: current.originalMimeType ?? f.mimeType ?? null,
+      };
+      pulledGroupsCount++;
+    } else if (
+      kindTag === 'KELOMPOK' &&
+      !current.groupDriveFileId &&
+      !current.groupPhotoUrl
+    ) {
+      mergedMeta[groupId] = {
+        ...current,
+        groupDriveFileId: f.id,
+        groupDriveWebViewLink: f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`,
+        groupDriveSyncedAt: f.createdTime ?? new Date().toISOString(),
+        groupOriginalFileName: current.groupOriginalFileName ?? f.name,
+        groupOriginalFileSize:
+          current.groupOriginalFileSize ?? (f.size ? Number(f.size) : null),
+        groupOriginalMimeType: current.groupOriginalMimeType ?? f.mimeType ?? null,
+      };
+      pulledGroupsCount++;
+    }
+  }
+
+  // 3) Union locked assessment submissions from Drive manifest + local server DB
+  const submissionMap = new Map<string, AssessmentSubmission>();
+  for (const sub of remoteManifest?.submissions ?? []) {
+    if (sub?.evaluatorGroupId && Array.isArray(sub.votes)) {
+      submissionMap.set(sub.evaluatorGroupId, sub);
+    }
+  }
+  const localIds = new Set(localSubmissions.map((s) => s.evaluatorGroupId));
+  let pulledVotesCount = 0;
+  for (const [gid] of submissionMap.entries()) {
+    if (!localIds.has(gid)) {
+      pulledVotesCount++;
+    }
+  }
+  for (const sub of localSubmissions) {
+    if (sub?.evaluatorGroupId) {
+      submissionMap.set(sub.evaluatorGroupId, sub);
+    }
+  }
+
+  return {
+    mergedArtworksMeta: mergedMeta,
+    mergedSubmissions: Array.from(submissionMap.values()),
+    pulledGroupsCount,
+    pulledVotesCount,
+  };
+}
+
+export function buildDriveManifestPayload(params: {
+  rootFolderId?: string | null;
+  rootFolderUrl?: string | null;
+  classFolderIds?: Record<string, string>;
+  artworksMeta: Record<string, ArtworkMetadataOverride>;
+  submissions: AssessmentSubmission[];
+}): DriveArchiveManifest {
+  const catalog = buildCatalogWithOverrides(params.artworksMeta);
+  return {
+    version: 2,
+    folderName: TARGET_FOLDER_NAME,
+    updatedAt: new Date().toISOString(),
+    ...(params.rootFolderId ? { driveFolderId: params.rootFolderId } : {}),
+    ...(params.rootFolderUrl ? { driveFolderUrl: params.rootFolderUrl } : {}),
+    classFolderIds: params.classFolderIds ?? {},
+    submissions: params.submissions,
+    artworks: catalog.map((a) => {
+      const ov = params.artworksMeta[a.groupId];
+      return {
+        groupId: a.groupId,
+        className: a.className,
+        grade: a.grade,
+        memberNames: a.memberNames,
+        artworkTitle: a.artworkTitle,
+        leaves: a.leaves,
+        technique: a.technique,
+        fabric: a.fabric,
+        mordant: a.mordant,
+        description: a.description,
+        metadataUpdatedAt: ov?.metadataUpdatedAt ?? null,
+        photoUrl: a.photoUrl,
+        photoUpdatedAt: a.photoUpdatedAt,
+        originalFileName: a.originalFileName,
+        originalFileSize: a.originalFileSize,
+        originalMimeType: a.originalMimeType,
+        driveFileId: a.driveFileId,
+        driveWebViewLink: a.driveWebViewLink,
+        driveSyncedAt: a.driveSyncedAt,
+        groupPhotoUrl: a.groupPhotoUrl,
+        groupPhotoUpdatedAt: a.groupPhotoUpdatedAt,
+        groupOriginalFileName: a.groupOriginalFileName,
+        groupOriginalFileSize: a.groupOriginalFileSize,
+        groupOriginalMimeType: a.groupOriginalMimeType,
+        groupDriveFileId: a.groupDriveFileId,
+        groupDriveWebViewLink: a.groupDriveWebViewLink,
+        groupDriveSyncedAt: a.groupDriveSyncedAt,
+      };
+    }),
+  };
+}
+
+export async function writeDriveManifestAndCsv(params: {
+  accessToken: string;
+  driveConfig: DriveArchiveConfig;
+  artworksMeta: Record<string, ArtworkMetadataOverride>;
+  submissions: AssessmentSubmission[];
+  ownerEmail?: string | null;
+}): Promise<DriveArchiveConfig> {
+  const { accessToken, driveConfig, artworksMeta, submissions, ownerEmail } = params;
+  const rootFolder = await ensureRootFolder(
+    accessToken,
+    driveConfig.driveFolderId,
+    false,
+  );
+  const catalog = buildCatalogWithOverrides(artworksMeta);
+  const recapitulation = computeRecapitulation(submissions, catalog);
+
+  const manifestPayload = buildDriveManifestPayload({
+    rootFolderId: rootFolder.id,
+    rootFolderUrl: rootFolder.webViewLink,
+    classFolderIds: driveConfig.classFolderIds ?? {},
+    artworksMeta,
+    submissions,
+  });
+
+  const [nextManifestId, nextCsvId] = await Promise.all([
+    upsertTextFileToDrive(
+      accessToken,
+      rootFolder.id,
+      MANIFEST_FILE_NAME,
+      'application/json',
+      JSON.stringify(manifestPayload, null, 2),
+      driveConfig.manifestFileId,
+    ),
+    upsertTextFileToDrive(
+      accessToken,
+      rootFolder.id,
+      CSV_ARCHIVE_FILE_NAME,
+      'text/csv',
+      buildCsvContent(catalog, recapitulation),
+      driveConfig.csvFileId,
+    ),
+  ]);
+
+  return {
+    ...driveConfig,
+    driveFolderId: rootFolder.id,
+    driveFolderUrl: rootFolder.webViewLink,
+    driveOwnerEmail: ownerEmail ?? driveConfig.driveOwnerEmail,
+    manifestFileId: nextManifestId,
+    csvFileId: nextCsvId,
+    lastSyncedAt: new Date().toISOString(),
+  };
+}
+
+export async function syncManifestViaAppsScriptWebhook(
+  webhookUrl: string,
+  params: {
+    artworksMeta: Record<string, ArtworkMetadataOverride>;
+    submissions: AssessmentSubmission[];
+    driveConfig: DriveArchiveConfig;
+  },
+): Promise<{
+  driveFolderId?: string;
+  driveFolderUrl?: string;
+  manifestFileId?: string;
+  csvFileId?: string;
+}> {
+  const catalog = buildCatalogWithOverrides(params.artworksMeta);
+  const recapitulation = computeRecapitulation(params.submissions, catalog);
+  const manifestPayload = buildDriveManifestPayload({
+    rootFolderId: params.driveConfig.driveFolderId,
+    rootFolderUrl: params.driveConfig.driveFolderUrl,
+    classFolderIds: params.driveConfig.classFolderIds,
+    artworksMeta: params.artworksMeta,
+    submissions: params.submissions,
+  });
+
+  const res = await fetch(webhookUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    redirect: 'follow',
+    body: JSON.stringify({
+      action: 'sync_manifest',
+      folderName: TARGET_FOLDER_NAME,
+      manifestFileName: MANIFEST_FILE_NAME,
+      manifestContent: JSON.stringify(manifestPayload, null, 2),
+      csvFileName: CSV_ARCHIVE_FILE_NAME,
+      csvContent: buildCsvContent(catalog, recapitulation),
+    }),
+  });
+
+  if (!res.ok) {
+    throw new ServerDriveApiError(
+      `Apps Script bridge mengembalikan status HTTP ${res.status}.`,
+      res.status,
+    );
+  }
+  const data = (await res.json()) as {
+    ok?: boolean;
+    folderId?: string;
+    folderUrl?: string;
+    manifestFileId?: string;
+    csvFileId?: string;
+  };
+  return {
+    driveFolderId: data.folderId,
+    driveFolderUrl: data.folderUrl,
+    manifestFileId: data.manifestFileId,
+    csvFileId: data.csvFileId,
+  };
+}
+
 export async function runFullDriveSync(params: {
   accessToken: string;
   ownerEmail?: string | null;
   driveConfig: DriveArchiveConfig;
-  catalog: ArtworkGroup[];
-  recapitulation: RecapitulationSummary;
+  artworksMeta: Record<string, ArtworkMetadataOverride>;
+  submissions: AssessmentSubmission[];
   readUploadedFileBuffer: (
     groupId: string,
     kind: PhotoKind,
   ) => Promise<{ buffer: Buffer; mimeType: string } | null>;
   applyOpenAccess?: boolean;
   forceArchiveDocs?: boolean;
+  pullFromDrive?: boolean;
 }): Promise<{
   driveConfig: DriveArchiveConfig;
+  mergedArtworksMeta: Record<string, ArtworkMetadataOverride>;
+  mergedSubmissions: AssessmentSubmission[];
+  pulledGroupsCount: number;
+  pulledVotesCount: number;
   syncedItems: Array<{
     groupId: string;
     kind: PhotoKind;
@@ -868,11 +1379,12 @@ export async function runFullDriveSync(params: {
     accessToken,
     ownerEmail,
     driveConfig,
-    catalog,
-    recapitulation,
+    artworksMeta,
+    submissions,
     readUploadedFileBuffer,
     applyOpenAccess = true,
     forceArchiveDocs = false,
+    pullFromDrive = true,
   } = params;
 
   const rootFolder = await ensureRootFolder(
@@ -881,10 +1393,56 @@ export async function runFullDriveSync(params: {
     applyOpenAccess,
   );
 
-  const classFolderIds: Record<string, string> = {
-    ...(driveConfig.classFolderIds ?? {}),
-  };
+  let classFolderIds = await discoverClassSubfolders(
+    accessToken,
+    rootFolder.id,
+    driveConfig.classFolderIds ?? {},
+  );
 
+  // 1) PULL FROM GOOGLE DRIVE FIRST when Admin connects/logs in
+  let mergedArtworksMeta: Record<string, ArtworkMetadataOverride> = {};
+  for (const [k, v] of Object.entries(artworksMeta)) {
+    mergedArtworksMeta[k] = { ...v };
+  }
+  let mergedSubmissions = [...submissions];
+  let pulledGroupsCount = 0;
+  let pulledVotesCount = 0;
+  let manifestFileId = driveConfig.manifestFileId;
+
+  const existingDriveFiles = await listDriveFolderFilesRecursive(
+    accessToken,
+    rootFolder.id,
+    classFolderIds,
+  );
+
+  if (pullFromDrive) {
+    const remoteManifestRes = await readDriveManifestSnapshot(
+      accessToken,
+      rootFolder.id,
+      manifestFileId,
+    );
+    if (remoteManifestRes.manifestFileId) {
+      manifestFileId = remoteManifestRes.manifestFileId;
+    }
+    if (remoteManifestRes.manifest?.classFolderIds) {
+      classFolderIds = {
+        ...remoteManifestRes.manifest.classFolderIds,
+        ...classFolderIds,
+      };
+    }
+    const merged = mergeDriveDataIntoState({
+      localArtworksMeta: mergedArtworksMeta,
+      localSubmissions: mergedSubmissions,
+      remoteManifest: remoteManifestRes.manifest,
+      remoteDriveFiles: existingDriveFiles,
+    });
+    mergedArtworksMeta = merged.mergedArtworksMeta;
+    mergedSubmissions = merged.mergedSubmissions;
+    pulledGroupsCount = merged.pulledGroupsCount;
+    pulledVotesCount = merged.pulledVotesCount;
+  }
+
+  // 2) PUSH PENDING LOCAL PHOTOS (including offline uploads made while Admin was off) to Drive
   const syncedItems: Array<{
     groupId: string;
     kind: PhotoKind;
@@ -893,7 +1451,7 @@ export async function runFullDriveSync(params: {
     driveSyncedAt: string;
   }> = [];
 
-  const updatedCatalog = [...catalog];
+  const updatedCatalog = buildCatalogWithOverrides(mergedArtworksMeta);
 
   for (let i = 0; i < updatedCatalog.length; i++) {
     let art = updatedCatalog[i];
@@ -937,6 +1495,12 @@ export async function runFullDriveSync(params: {
           driveWebViewLink: uploaded.webViewLink,
           driveSyncedAt: syncedAt,
         });
+        mergedArtworksMeta[art.groupId] = {
+          ...(mergedArtworksMeta[art.groupId] ?? {}),
+          driveFileId: uploaded.id,
+          driveWebViewLink: uploaded.webViewLink,
+          driveSyncedAt: syncedAt,
+        };
         art = {
           ...art,
           driveFileId: uploaded.id,
@@ -967,6 +1531,12 @@ export async function runFullDriveSync(params: {
           driveWebViewLink: uploaded.webViewLink,
           driveSyncedAt: syncedAt,
         });
+        mergedArtworksMeta[art.groupId] = {
+          ...(mergedArtworksMeta[art.groupId] ?? {}),
+          groupDriveFileId: uploaded.id,
+          groupDriveWebViewLink: uploaded.webViewLink,
+          groupDriveSyncedAt: syncedAt,
+        };
         art = {
           ...art,
           groupDriveFileId: uploaded.id,
@@ -979,36 +1549,25 @@ export async function runFullDriveSync(params: {
     updatedCatalog[i] = art;
   }
 
-  let manifestFileId = driveConfig.manifestFileId;
   let csvFileId = driveConfig.csvFileId ?? null;
+  const recapitulation = computeRecapitulation(mergedSubmissions, updatedCatalog);
 
-  if (syncedItems.length > 0 || forceArchiveDocs || !manifestFileId || !csvFileId) {
-    const manifestPayload = {
-      folderName: TARGET_FOLDER_NAME,
-      updatedAt: new Date().toISOString(),
-      driveFolderUrl: rootFolder.webViewLink,
+  // 3) ALWAYS WRITE UPDATED COMPLETE SNAPSHOT (manifest.json + CSV) back to Google Drive
+  if (
+    syncedItems.length > 0 ||
+    pulledGroupsCount > 0 ||
+    pulledVotesCount > 0 ||
+    forceArchiveDocs ||
+    !manifestFileId ||
+    !csvFileId
+  ) {
+    const manifestPayload = buildDriveManifestPayload({
+      rootFolderId: rootFolder.id,
+      rootFolderUrl: rootFolder.webViewLink,
       classFolderIds,
-      artworks: updatedCatalog.map((a) => ({
-        groupId: a.groupId,
-        className: a.className,
-        grade: a.grade,
-        memberNames: a.memberNames,
-        artworkTitle: a.artworkTitle,
-        leaves: a.leaves,
-        technique: a.technique,
-        fabric: a.fabric,
-        mordant: a.mordant,
-        description: a.description,
-        originalFileName: a.originalFileName,
-        originalFileSize: a.originalFileSize,
-        driveFileId: a.driveFileId,
-        driveWebViewLink: a.driveWebViewLink,
-        groupOriginalFileName: a.groupOriginalFileName,
-        groupOriginalFileSize: a.groupOriginalFileSize,
-        groupDriveFileId: a.groupDriveFileId,
-        groupDriveWebViewLink: a.groupDriveWebViewLink,
-      })),
-    };
+      artworksMeta: mergedArtworksMeta,
+      submissions: mergedSubmissions,
+    });
 
     const [nextManifestId, nextCsvId] = await Promise.all([
       upsertTextFileToDrive(
@@ -1050,6 +1609,10 @@ export async function runFullDriveSync(params: {
       csvFileId,
       lastSyncedAt: new Date().toISOString(),
     },
+    mergedArtworksMeta,
+    mergedSubmissions,
+    pulledGroupsCount,
+    pulledVotesCount,
     syncedItems,
     driveFiles,
     openAccessMessage: rootFolder.openAccessMessage,

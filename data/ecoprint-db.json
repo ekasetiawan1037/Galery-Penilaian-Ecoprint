@@ -1,5 +1,90 @@
 {
-  "submissions": [],
+  "submissions": [
+    {
+      "evaluatorGroupId": "71-1",
+      "evaluatorClassName": "71",
+      "evaluatorGrade": 7,
+      "votes": [
+        {
+          "artworkGroupId": "72-1",
+          "rank": 1,
+          "stars": 4,
+          "points": 4,
+          "artworkClassName": "72",
+          "artworkGrade": 7
+        },
+        {
+          "artworkGroupId": "81-1",
+          "rank": 2,
+          "stars": 3,
+          "points": 3,
+          "artworkClassName": "81",
+          "artworkGrade": 8
+        },
+        {
+          "artworkGroupId": "91-1",
+          "rank": 3,
+          "stars": 2,
+          "points": 2,
+          "artworkClassName": "91",
+          "artworkGrade": 9
+        },
+        {
+          "artworkGroupId": "95-4",
+          "rank": 4,
+          "stars": 1,
+          "points": 1,
+          "artworkClassName": "95",
+          "artworkGrade": 9
+        }
+      ],
+      "submittedAt": "2026-11-19T02:23:15.975Z",
+      "locked": true,
+      "isDemoSeed": false
+    },
+    {
+      "evaluatorGroupId": "72-2",
+      "evaluatorClassName": "72",
+      "evaluatorGrade": 7,
+      "votes": [
+        {
+          "artworkGroupId": "71-1",
+          "rank": 1,
+          "stars": 4,
+          "points": 4,
+          "artworkClassName": "71",
+          "artworkGrade": 7
+        },
+        {
+          "artworkGroupId": "81-2",
+          "rank": 2,
+          "stars": 3,
+          "points": 3,
+          "artworkClassName": "81",
+          "artworkGrade": 8
+        },
+        {
+          "artworkGroupId": "92-1",
+          "rank": 3,
+          "stars": 2,
+          "points": 2,
+          "artworkClassName": "92",
+          "artworkGrade": 9
+        },
+        {
+          "artworkGroupId": "93-4",
+          "rank": 4,
+          "stars": 1,
+          "points": 1,
+          "artworkClassName": "93",
+          "artworkGrade": 9
+        }
+      ],
+      "submittedAt": "2026-11-19T02:23:16.031Z",
+      "locked": true,
+      "isDemoSeed": false
+    }
+  ],
   "passwords": {
     "71-1": "JRZY3D",
     "71-2": "BYS72B",
@@ -55,16 +140,596 @@
     "95-4": "5334FB"
   },
   "tokenSecret": "736be0d60359982972e6b3dc7071bc79ac2dad3270a84da8cb6d84ae2bb44d6b",
-  "artworksMeta": {},
+  "artworksMeta": {
+    "71-3": {
+      "memberNames": "Tim Melati — Raka, Sinta, Dewi",
+      "artworkTitle": "Jejak Daun Jati Senja",
+      "technique": "Pounding & Steam",
+      "leaves": "Daun Jati, Kenikir, Pakis",
+      "fabric": "Katun Primisima",
+      "mordant": "Tawas & Tunjung",
+      "description": "Karya hasil edit lengkap oleh Admin Guru dengan 2 foto resolusi asli.",
+      "metadataUpdatedAt": "2026-11-19T02:24:02.255Z",
+      "photoUrl": "/uploads/71-3.png?v=1795055042194",
+      "photoUpdatedAt": "2026-11-19T02:24:02.193Z",
+      "originalFileName": "karya_71_3_asli.png",
+      "originalFileSize": 4096,
+      "originalMimeType": "image/png",
+      "driveFileId": null,
+      "driveWebViewLink": null,
+      "driveSyncedAt": null,
+      "groupPhotoUrl": null,
+      "groupPhotoUpdatedAt": null,
+      "groupOriginalFileName": null,
+      "groupOriginalFileSize": null,
+      "groupOriginalMimeType": null,
+      "groupDriveFileId": null,
+      "groupDriveWebViewLink": null,
+      "groupDriveSyncedAt": null
+    },
+    "71-1": {
+      "memberNames": "Kelompok Melati 71-1",
+      "artworkTitle": "Pesona Jati Merah",
+      "leaves": "Daun Jati & Pepaya",
+      "description": "Karya siswa 71-1 tersimpan langsung ke Drive.",
+      "metadataUpdatedAt": "2026-11-19T02:23:15.923Z",
+      "photoUrl": "/uploads/71-1.png?v=1795054995952",
+      "photoUpdatedAt": "2026-11-19T02:23:15.923Z",
+      "originalFileName": "karya711.png",
+      "originalFileSize": 2048,
+      "originalMimeType": "image/png",
+      "driveFileId": "mock-file-14",
+      "driveWebViewLink": "https://drive.google.com/file/d/mock-file-14/view",
+      "driveSyncedAt": "2026-11-19T02:23:15.943Z",
+      "groupPhotoUrl": "/uploads/71-1_kelompok.png?v=1795054995952",
+      "groupPhotoUpdatedAt": "2026-11-19T02:23:15.923Z",
+      "groupOriginalFileName": "kelompok711.png",
+      "groupOriginalFileSize": 2048,
+      "groupOriginalMimeType": "image/png",
+      "groupDriveFileId": "mock-file-17",
+      "groupDriveWebViewLink": "https://drive.google.com/file/d/mock-file-17/view",
+      "groupDriveSyncedAt": "2026-11-19T02:23:15.952Z"
+    },
+    "83-2": {
+      "memberNames": "Tim Kenanga 83-2 (Diedit Guru)",
+      "artworkTitle": "Simfoni Kenikir",
+      "leaves": "Daun Kenikir, Jarak",
+      "description": "Deskripsi resmi diperbarui oleh guru.",
+      "metadataUpdatedAt": "2026-11-19T02:23:15.993Z",
+      "photoUrl": null,
+      "photoUpdatedAt": null,
+      "originalFileName": null,
+      "originalFileSize": null,
+      "originalMimeType": null,
+      "driveFileId": null,
+      "driveWebViewLink": null,
+      "driveSyncedAt": null,
+      "groupPhotoUrl": null,
+      "groupPhotoUpdatedAt": null,
+      "groupOriginalFileName": null,
+      "groupOriginalFileSize": null,
+      "groupOriginalMimeType": null,
+      "groupDriveFileId": null,
+      "groupDriveWebViewLink": null,
+      "groupDriveSyncedAt": null
+    },
+    "72-2": {
+      "memberNames": "Kelompok Offline 72-2",
+      "artworkTitle": "Daun Jarak Offline",
+      "leaves": "Daun Jarak",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.023Z",
+      "photoUrl": "/uploads/72-2.png?v=1795054996024",
+      "photoUpdatedAt": "2026-11-19T02:23:16.023Z",
+      "originalFileName": "offline722.png",
+      "originalFileSize": 1500,
+      "originalMimeType": "image/png",
+      "driveFileId": "mock-file-21",
+      "driveWebViewLink": "https://drive.google.com/file/d/mock-file-21/view",
+      "driveSyncedAt": "2026-11-19T02:23:16.083Z",
+      "groupPhotoUrl": null,
+      "groupPhotoUpdatedAt": null,
+      "groupOriginalFileName": null,
+      "groupOriginalFileSize": null,
+      "groupOriginalMimeType": null,
+      "groupDriveFileId": null,
+      "groupDriveWebViewLink": null,
+      "groupDriveSyncedAt": null
+    },
+    "71-2": {
+      "memberNames": "",
+      "artworkTitle": "Simfoni Pakis & Kenikir",
+      "leaves": "Daun Kersen, Belimbing Wuluh",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Katun Primisima",
+      "mordant": "Tunjung (Fero Sulfat)",
+      "description": "Karya ecoprint Kelompok 71-2 menggunakan teknik kukus dua lapis pada media katun primisima dengan fiksasi tunjung (fero sulfat).",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "71-4": {
+      "memberNames": "",
+      "artworkTitle": "Siluet Besi Daun Lanang",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Kain Blacu Halus",
+      "mordant": "Soda Ash & Tunjung",
+      "description": "Karya ecoprint Kelompok 71-4 menggunakan teknik kukus dua lapis pada media kain blacu halus dengan fiksasi soda ash & tunjung.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "72-1": {
+      "memberNames": "",
+      "artworkTitle": "Rona Ketapang Nusantara",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Iron Blanket",
+      "fabric": "Sutra Alam",
+      "mordant": "Tawas & Cuka Apel",
+      "description": "Karya ecoprint Kelompok 72-1 menggunakan teknik iron blanket pada media sutra alam dengan fiksasi tawas & cuka apel.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "72-3": {
+      "memberNames": "",
+      "artworkTitle": "Lembayung Jati Pesisir",
+      "leaves": "Daun Ketapang, Jarak Merah",
+      "technique": "Iron Blanket",
+      "fabric": "Linen Organik",
+      "mordant": "Tawas & Kapur Sirih",
+      "description": "Karya ecoprint Kelompok 72-3 menggunakan teknik iron blanket pada media linen organik dengan fiksasi tawas & kapur sirih.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "72-4": {
+      "memberNames": "",
+      "artworkTitle": "Kanvas Hutan Tropis",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Kain Blacu Halus",
+      "mordant": "Soda Ash & Tunjung",
+      "description": "Karya ecoprint Kelompok 72-4 menggunakan teknik kukus dua lapis pada media kain blacu halus dengan fiksasi soda ash & tunjung.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "73-1": {
+      "memberNames": "",
+      "artworkTitle": "Mozaik Daun Pepaya",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Iron Blanket",
+      "fabric": "Sutra Alam",
+      "mordant": "Tawas & Cuka Apel",
+      "description": "Karya ecoprint Kelompok 73-1 menggunakan teknik iron blanket pada media sutra alam dengan fiksasi tawas & cuka apel.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "73-2": {
+      "memberNames": "",
+      "artworkTitle": "Embrio Serat Alam",
+      "leaves": "Daun Kersen, Belimbing Wuluh",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Katun Primisima",
+      "mordant": "Tunjung (Fero Sulfat)",
+      "description": "Karya ecoprint Kelompok 73-2 menggunakan teknik kukus dua lapis pada media katun primisima dengan fiksasi tunjung (fero sulfat).",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "73-3": {
+      "memberNames": "",
+      "artworkTitle": "Pijar Okra di Linen",
+      "leaves": "Daun Ketapang, Jarak Merah",
+      "technique": "Iron Blanket",
+      "fabric": "Linen Organik",
+      "mordant": "Tawas & Kapur Sirih",
+      "description": "Karya ecoprint Kelompok 73-3 menggunakan teknik iron blanket pada media linen organik dengan fiksasi tawas & kapur sirih.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "73-4": {
+      "memberNames": "",
+      "artworkTitle": "Gema Hutan Hujan",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Kain Blacu Halus",
+      "mordant": "Soda Ash & Tunjung",
+      "description": "Karya ecoprint Kelompok 73-4 menggunakan teknik kukus dua lapis pada media kain blacu halus dengan fiksasi soda ash & tunjung.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "81-1": {
+      "memberNames": "",
+      "artworkTitle": "Kala Daun Gugur",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Iron Blanket",
+      "fabric": "Katun Primisima",
+      "mordant": "Tawas & Cuka Apel",
+      "description": "Karya ecoprint Kelompok 81-1 menggunakan teknik iron blanket pada media katun primisima dengan fiksasi tawas & cuka apel.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "81-2": {
+      "memberNames": "",
+      "artworkTitle": "Tinta Bumi & Tawas",
+      "leaves": "Daun Kersen, Belimbing Wuluh",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Linen Organik",
+      "mordant": "Tunjung (Fero Sulfat)",
+      "description": "Karya ecoprint Kelompok 81-2 menggunakan teknik kukus dua lapis pada media linen organik dengan fiksasi tunjung (fero sulfat).",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "81-3": {
+      "memberNames": "",
+      "artworkTitle": "Garis Urat Jati Tua",
+      "leaves": "Daun Ketapang, Jarak Merah",
+      "technique": "Iron Blanket",
+      "fabric": "Kain Blacu Halus",
+      "mordant": "Tawas & Kapur Sirih",
+      "description": "Karya ecoprint Kelompok 81-3 menggunakan teknik iron blanket pada media kain blacu halus dengan fiksasi tawas & kapur sirih.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "81-4": {
+      "memberNames": "",
+      "artworkTitle": "Cahaya Pagi Eucalyptus",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Sutra Alam",
+      "mordant": "Soda Ash & Tunjung",
+      "description": "Karya ecoprint Kelompok 81-4 menggunakan teknik kukus dua lapis pada media sutra alam dengan fiksasi soda ash & tunjung.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "82-1": {
+      "memberNames": "",
+      "artworkTitle": "Taman Kenikir Simetris",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Iron Blanket",
+      "fabric": "Katun Primisima",
+      "mordant": "Tawas & Cuka Apel",
+      "description": "Karya ecoprint Kelompok 82-1 menggunakan teknik iron blanket pada media katun primisima dengan fiksasi tawas & cuka apel.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "82-2": {
+      "memberNames": "",
+      "artworkTitle": "Bara Tanin Ketapang",
+      "leaves": "Daun Kersen, Belimbing Wuluh",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Linen Organik",
+      "mordant": "Tunjung (Fero Sulfat)",
+      "description": "Karya ecoprint Kelompok 82-2 menggunakan teknik kukus dua lapis pada media linen organik dengan fiksasi tunjung (fero sulfat).",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "82-3": {
+      "memberNames": "",
+      "artworkTitle": "Senandung Pakis Hijau",
+      "leaves": "Daun Ketapang, Jarak Merah",
+      "technique": "Iron Blanket",
+      "fabric": "Kain Blacu Halus",
+      "mordant": "Tawas & Kapur Sirih",
+      "description": "Karya ecoprint Kelompok 82-3 menggunakan teknik iron blanket pada media kain blacu halus dengan fiksasi tawas & kapur sirih.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "82-4": {
+      "memberNames": "",
+      "artworkTitle": "Batu Tulis Iron Blanket",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Sutra Alam",
+      "mordant": "Soda Ash & Tunjung",
+      "description": "Karya ecoprint Kelompok 82-4 menggunakan teknik kukus dua lapis pada media sutra alam dengan fiksasi soda ash & tunjung.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "83-1": {
+      "memberNames": "",
+      "artworkTitle": "Aroma Kukus Rimba",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Iron Blanket",
+      "fabric": "Katun Primisima",
+      "mordant": "Tawas & Cuka Apel",
+      "description": "Karya ecoprint Kelompok 83-1 menggunakan teknik iron blanket pada media katun primisima dengan fiksasi tawas & cuka apel.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "83-3": {
+      "memberNames": "",
+      "artworkTitle": "Tarian Klorofil & Besi",
+      "leaves": "Daun Ketapang, Jarak Merah",
+      "technique": "Iron Blanket",
+      "fabric": "Kain Blacu Halus",
+      "mordant": "Tawas & Kapur Sirih",
+      "description": "Karya ecoprint Kelompok 83-3 menggunakan teknik iron blanket pada media kain blacu halus dengan fiksasi tawas & kapur sirih.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "83-4": {
+      "memberNames": "",
+      "artworkTitle": "Puspa Latar Blacu",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Sutra Alam",
+      "mordant": "Soda Ash & Tunjung",
+      "description": "Karya ecoprint Kelompok 83-4 menggunakan teknik kukus dua lapis pada media sutra alam dengan fiksasi soda ash & tunjung.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "84-1": {
+      "memberNames": "",
+      "artworkTitle": "Ombak Daun Kersen",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Iron Blanket",
+      "fabric": "Katun Primisima",
+      "mordant": "Tawas & Cuka Apel",
+      "description": "Karya ecoprint Kelompok 84-1 menggunakan teknik iron blanket pada media katun primisima dengan fiksasi tawas & cuka apel.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "84-2": {
+      "memberNames": "",
+      "artworkTitle": "Kepingan Flora Sekolah",
+      "leaves": "Daun Kersen, Belimbing Wuluh",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Linen Organik",
+      "mordant": "Tunjung (Fero Sulfat)",
+      "description": "Karya ecoprint Kelompok 84-2 menggunakan teknik kukus dua lapis pada media linen organik dengan fiksasi tunjung (fero sulfat).",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "84-3": {
+      "memberNames": "",
+      "artworkTitle": "Peta Urat Daun Jati",
+      "leaves": "Daun Ketapang, Jarak Merah",
+      "technique": "Iron Blanket",
+      "fabric": "Kain Blacu Halus",
+      "mordant": "Tawas & Kapur Sirih",
+      "description": "Karya ecoprint Kelompok 84-3 menggunakan teknik iron blanket pada media kain blacu halus dengan fiksasi tawas & kapur sirih.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "84-4": {
+      "memberNames": "",
+      "artworkTitle": "Teduh Hutan Jawa",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Sutra Alam",
+      "mordant": "Soda Ash & Tunjung",
+      "description": "Karya ecoprint Kelompok 84-4 menggunakan teknik kukus dua lapis pada media sutra alam dengan fiksasi soda ash & tunjung.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "85-1": {
+      "memberNames": "",
+      "artworkTitle": "Sinar Kuning Marigold",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Iron Blanket",
+      "fabric": "Katun Primisima",
+      "mordant": "Tawas & Cuka Apel",
+      "description": "Karya ecoprint Kelompok 85-1 menggunakan teknik iron blanket pada media katun primisima dengan fiksasi tawas & cuka apel.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "85-2": {
+      "memberNames": "",
+      "artworkTitle": "Jaring Halus Pakis Gunung",
+      "leaves": "Daun Kersen, Belimbing Wuluh",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Linen Organik",
+      "mordant": "Tunjung (Fero Sulfat)",
+      "description": "Karya ecoprint Kelompok 85-2 menggunakan teknik kukus dua lapis pada media linen organik dengan fiksasi tunjung (fero sulfat).",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "85-3": {
+      "memberNames": "",
+      "artworkTitle": "Jejak Tumbuk Organik",
+      "leaves": "Daun Ketapang, Jarak Merah",
+      "technique": "Iron Blanket",
+      "fabric": "Kain Blacu Halus",
+      "mordant": "Tawas & Kapur Sirih",
+      "description": "Karya ecoprint Kelompok 85-3 menggunakan teknik iron blanket pada media kain blacu halus dengan fiksasi tawas & kapur sirih.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "85-4": {
+      "memberNames": "",
+      "artworkTitle": "Surya di Serat Katun",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Sutra Alam",
+      "mordant": "Soda Ash & Tunjung",
+      "description": "Karya ecoprint Kelompok 85-4 menggunakan teknik kukus dua lapis pada media sutra alam dengan fiksasi soda ash & tunjung.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "91-1": {
+      "memberNames": "",
+      "artworkTitle": "Lapisan Tanin Alami",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Iron Blanket",
+      "fabric": "Linen Organik",
+      "mordant": "Tawas & Cuka Apel",
+      "description": "Karya ecoprint Kelompok 91-1 menggunakan teknik iron blanket pada media linen organik dengan fiksasi tawas & cuka apel.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "91-2": {
+      "memberNames": "",
+      "artworkTitle": "Ranting Senja & Embun",
+      "leaves": "Daun Kersen, Belimbing Wuluh",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Kain Blacu Halus",
+      "mordant": "Tunjung (Fero Sulfat)",
+      "description": "Karya ecoprint Kelompok 91-2 menggunakan teknik kukus dua lapis pada media kain blacu halus dengan fiksasi tunjung (fero sulfat).",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "91-3": {
+      "memberNames": "",
+      "artworkTitle": "Bayangan Kayu Manis",
+      "leaves": "Daun Ketapang, Jarak Merah",
+      "technique": "Iron Blanket",
+      "fabric": "Sutra Alam",
+      "mordant": "Tawas & Kapur Sirih",
+      "description": "Karya ecoprint Kelompok 91-3 menggunakan teknik iron blanket pada media sutra alam dengan fiksasi tawas & kapur sirih.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "91-4": {
+      "memberNames": "",
+      "artworkTitle": "Selimut Besi & Tawas",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Katun Primisima",
+      "mordant": "Soda Ash & Tunjung",
+      "description": "Karya ecoprint Kelompok 91-4 menggunakan teknik kukus dua lapis pada media katun primisima dengan fiksasi soda ash & tunjung.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "92-1": {
+      "memberNames": "",
+      "artworkTitle": "Komposisi Daun Singkong",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Iron Blanket",
+      "fabric": "Linen Organik",
+      "mordant": "Tawas & Cuka Apel",
+      "description": "Karya ecoprint Kelompok 92-1 menggunakan teknik iron blanket pada media linen organik dengan fiksasi tawas & cuka apel.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "92-2": {
+      "memberNames": "",
+      "artworkTitle": "Pola Klasik Daun Belimbing",
+      "leaves": "Daun Kersen, Belimbing Wuluh",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Kain Blacu Halus",
+      "mordant": "Tunjung (Fero Sulfat)",
+      "description": "Karya ecoprint Kelompok 92-2 menggunakan teknik kukus dua lapis pada media kain blacu halus dengan fiksasi tunjung (fero sulfat).",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "92-3": {
+      "memberNames": "",
+      "artworkTitle": "Aura Natural Primisima",
+      "leaves": "Daun Ketapang, Jarak Merah",
+      "technique": "Iron Blanket",
+      "fabric": "Sutra Alam",
+      "mordant": "Tawas & Kapur Sirih",
+      "description": "Karya ecoprint Kelompok 92-3 menggunakan teknik iron blanket pada media sutra alam dengan fiksasi tawas & kapur sirih.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "92-4": {
+      "memberNames": "",
+      "artworkTitle": "Ritme Alam Nusantara",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Katun Primisima",
+      "mordant": "Soda Ash & Tunjung",
+      "description": "Karya ecoprint Kelompok 92-4 menggunakan teknik kukus dua lapis pada media katun primisima dengan fiksasi soda ash & tunjung.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "93-1": {
+      "memberNames": "",
+      "artworkTitle": "Spektrum Daun Mangga",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Iron Blanket",
+      "fabric": "Linen Organik",
+      "mordant": "Tawas & Cuka Apel",
+      "description": "Karya ecoprint Kelompok 93-1 menggunakan teknik iron blanket pada media linen organik dengan fiksasi tawas & cuka apel.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "93-2": {
+      "memberNames": "",
+      "artworkTitle": "Arsip Botani Kelas Sembilan",
+      "leaves": "Daun Kersen, Belimbing Wuluh",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Kain Blacu Halus",
+      "mordant": "Tunjung (Fero Sulfat)",
+      "description": "Karya ecoprint Kelompok 93-2 menggunakan teknik kukus dua lapis pada media kain blacu halus dengan fiksasi tunjung (fero sulfat).",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "93-3": {
+      "memberNames": "",
+      "artworkTitle": "Goresan Tanin Pekat",
+      "leaves": "Daun Ketapang, Jarak Merah",
+      "technique": "Iron Blanket",
+      "fabric": "Sutra Alam",
+      "mordant": "Tawas & Kapur Sirih",
+      "description": "Karya ecoprint Kelompok 93-3 menggunakan teknik iron blanket pada media sutra alam dengan fiksasi tawas & kapur sirih.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "93-4": {
+      "memberNames": "",
+      "artworkTitle": "Sajak Daun Ketapang",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Katun Primisima",
+      "mordant": "Soda Ash & Tunjung",
+      "description": "Karya ecoprint Kelompok 93-4 menggunakan teknik kukus dua lapis pada media katun primisima dengan fiksasi soda ash & tunjung.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "94-1": {
+      "memberNames": "",
+      "artworkTitle": "Bunga Kenikir & Pakis",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Iron Blanket",
+      "fabric": "Linen Organik",
+      "mordant": "Tawas & Cuka Apel",
+      "description": "Karya ecoprint Kelompok 94-1 menggunakan teknik iron blanket pada media linen organik dengan fiksasi tawas & cuka apel.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "94-2": {
+      "memberNames": "",
+      "artworkTitle": "Kukus Pagi di Sutra",
+      "leaves": "Daun Kersen, Belimbing Wuluh",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Kain Blacu Halus",
+      "mordant": "Tunjung (Fero Sulfat)",
+      "description": "Karya ecoprint Kelompok 94-2 menggunakan teknik kukus dua lapis pada media kain blacu halus dengan fiksasi tunjung (fero sulfat).",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "94-3": {
+      "memberNames": "",
+      "artworkTitle": "Harmoni Dua Mordant",
+      "leaves": "Daun Ketapang, Jarak Merah",
+      "technique": "Iron Blanket",
+      "fabric": "Sutra Alam",
+      "mordant": "Tawas & Kapur Sirih",
+      "description": "Karya ecoprint Kelompok 94-3 menggunakan teknik iron blanket pada media sutra alam dengan fiksasi tawas & kapur sirih.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "94-4": {
+      "memberNames": "",
+      "artworkTitle": "Ekspresi Daun Afrika",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Katun Primisima",
+      "mordant": "Soda Ash & Tunjung",
+      "description": "Karya ecoprint Kelompok 94-4 menggunakan teknik kukus dua lapis pada media katun primisima dengan fiksasi soda ash & tunjung.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "95-1": {
+      "memberNames": "",
+      "artworkTitle": "Tapak Rimba Tropika",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Iron Blanket",
+      "fabric": "Linen Organik",
+      "mordant": "Tawas & Cuka Apel",
+      "description": "Karya ecoprint Kelompok 95-1 menggunakan teknik iron blanket pada media linen organik dengan fiksasi tawas & cuka apel.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "95-2": {
+      "memberNames": "",
+      "artworkTitle": "Cetak Alam Berkelanjutan",
+      "leaves": "Daun Kersen, Belimbing Wuluh",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Kain Blacu Halus",
+      "mordant": "Tunjung (Fero Sulfat)",
+      "description": "Karya ecoprint Kelompok 95-2 menggunakan teknik kukus dua lapis pada media kain blacu halus dengan fiksasi tunjung (fero sulfat).",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "95-3": {
+      "memberNames": "",
+      "artworkTitle": "Pelita Serat Tradisional",
+      "leaves": "Daun Ketapang, Jarak Merah",
+      "technique": "Iron Blanket",
+      "fabric": "Sutra Alam",
+      "mordant": "Tawas & Kapur Sirih",
+      "description": "Karya ecoprint Kelompok 95-3 menggunakan teknik iron blanket pada media sutra alam dengan fiksasi tawas & kapur sirih.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    },
+    "95-4": {
+      "memberNames": "",
+      "artworkTitle": "Kanvas Hijau Lestari",
+      "leaves": "Eucalyptus, Daun Lanang",
+      "technique": "Kukus Dua Lapis",
+      "fabric": "Katun Primisima",
+      "mordant": "Soda Ash & Tunjung",
+      "description": "Karya ecoprint Kelompok 95-4 menggunakan teknik kukus dua lapis pada media katun primisima dengan fiksasi soda ash & tunjung.",
+      "metadataUpdatedAt": "2026-11-19T02:23:16.004Z"
+    }
+  },
   "driveConfig": {
     "driveFolderId": "1OIdPT6ENuGvKH02VSS_iwms217RpsXPA",
     "driveFolderUrl": "https://drive.google.com/drive/folders/1OIdPT6ENuGvKH02VSS_iwms217RpsXPA",
     "driveOwnerEmail": "eka.setiawan1037@guru.smp.belajar.id",
     "driveOpenAccessStatus": "anyone-writer",
-    "classFolderIds": {},
-    "manifestFileId": "14fAJAC2rD9yXnMTPoz6XmbMb-3TGVnwd",
-    "csvFileId": "1WcIbwtug2npXrX21uFxz6Cj8EPQb6x-h",
-    "lastSyncedAt": "2026-11-19T01:38:51.489Z"
+    "classFolderIds": {
+      "71": "mock-folder-2",
+      "72": "mock-folder-19"
+    },
+    "manifestFileId": "mock-file-9",
+    "csvFileId": "mock-file-10",
+    "driveWebhookUrl": null,
+    "lastSyncedAt": "2026-11-19T02:23:16.097Z"
   },
-  "updatedAt": "2026-11-19T01:47:13.336Z"
+  "revision": 11,
+  "updatedAt": "2026-11-19T02:24:02.255Z"
 }
