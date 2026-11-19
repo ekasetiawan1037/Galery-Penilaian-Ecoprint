@@ -54,6 +54,7 @@ interface ApiStateResponse {
   submissions: AssessmentSubmission[];
   recapitulation: RecapitulationSummary;
   driveConfig: DriveArchiveConfig;
+  revision?: number;
   updatedAt: string;
   runtimeInfo?: RuntimeStorageInfo;
 }
@@ -126,17 +127,37 @@ export default function App() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  const applyApiState = useCallback((data: ApiStateResponse) => {
-    setCatalog(data.catalog);
-    setSubmissions(data.submissions);
-    setRecapitulation(data.recapitulation);
-    if (data.driveConfig) {
-      setDriveConfig(data.driveConfig);
-    }
-    if (data.runtimeInfo) {
-      setRuntimeInfo(data.runtimeInfo);
-    }
-  }, []);
+  const latestRevisionRef = useRef<number>(0);
+
+  const applyApiState = useCallback(
+    (data: ApiStateResponse, options?: { fromPoll?: boolean }) => {
+      const incomingRev = data.revision ?? 0;
+      const isColdEmptyVercelPoll =
+        Boolean(options?.fromPoll) &&
+        data.runtimeInfo?.storagePersistent === false &&
+        incomingRev === 0 &&
+        latestRevisionRef.current > 0;
+
+      if (isColdEmptyVercelPoll) {
+        return;
+      }
+
+      if (incomingRev > latestRevisionRef.current) {
+        latestRevisionRef.current = incomingRev;
+      }
+
+      setCatalog(data.catalog);
+      setSubmissions(data.submissions);
+      setRecapitulation(data.recapitulation);
+      if (data.driveConfig) {
+        setDriveConfig(data.driveConfig);
+      }
+      if (data.runtimeInfo) {
+        setRuntimeInfo(data.runtimeInfo);
+      }
+    },
+    [],
+  );
 
   const fetchState = useCallback(async () => {
     try {
@@ -312,12 +333,14 @@ export default function App() {
   // Live connected dashboard polling every 5s for ALL 52 student groups & teacher admin
   useEffect(() => {
     const interval = window.setInterval(async () => {
-      if (document.hidden) return;
+      if (document.hidden || uploadModalOpen || groupSelectorOpen || isSubmitting) {
+        return;
+      }
       try {
         const res = await fetch('/api/state');
         if (res.ok) {
           const data = (await res.json()) as ApiStateResponse;
-          applyApiState(data);
+          applyApiState(data, { fromPoll: true });
           if (adminToken && driveAccessToken && !driveActivationUrl) {
             const hasPending = data.catalog.some(
               (art) => Boolean(art.photoUrl) && !art.driveFileId,
@@ -336,6 +359,9 @@ export default function App() {
     adminToken,
     driveAccessToken,
     driveActivationUrl,
+    uploadModalOpen,
+    groupSelectorOpen,
+    isSubmitting,
     applyApiState,
     syncPendingPhotosToDrive,
   ]);

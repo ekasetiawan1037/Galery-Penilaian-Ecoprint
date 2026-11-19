@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { KeyRound, Lock, LogOut, Search, X } from 'lucide-react';
 import {
   GRADE_CLASSES,
@@ -31,9 +31,10 @@ export const GroupSelectorModal: React.FC<GroupSelectorModalProps> = ({
   const [query, setQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const wasOpenRef = useRef(false);
 
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && !wasOpenRef.current) {
       setError(null);
       setPassword('');
       if (activeGroup) {
@@ -41,6 +42,7 @@ export const GroupSelectorModal: React.FC<GroupSelectorModalProps> = ({
         setPickedGroupId(activeGroup.groupId);
       }
     }
+    wasOpenRef.current = isOpen;
   }, [isOpen, activeGroup]);
 
   if (!isOpen) return null;

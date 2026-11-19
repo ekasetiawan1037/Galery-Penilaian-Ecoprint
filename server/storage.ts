@@ -14,6 +14,7 @@ export interface PersistedDatabase {
   tokenSecret: string;
   artworksMeta: Record<string, ArtworkMetadataOverride>;
   driveConfig: DriveArchiveConfig;
+  revision?: number;
   updatedAt: string;
 }
 
@@ -232,6 +233,7 @@ function normalizeParsedDb(parsed: Partial<PersistedDatabase>): {
       tokenSecret,
       artworksMeta,
       driveConfig,
+      revision: typeof parsed.revision === 'number' ? parsed.revision : 0,
       updatedAt: parsed.updatedAt ?? new Date().toISOString(),
     },
     changed,
@@ -239,12 +241,25 @@ function normalizeParsedDb(parsed: Partial<PersistedDatabase>): {
 }
 
 function createInitialDb(): PersistedDatabase {
+  // When running on Vercel (/tmp), seed initial passwords/driveConfig from bundled data/ecoprint-db.json if present
+  const bundledDbPath = path.resolve(process.cwd(), 'data', 'ecoprint-db.json');
+  if (bundledDbPath !== DB_FILE && fs.existsSync(bundledDbPath)) {
+    try {
+      const raw = fs.readFileSync(bundledDbPath, 'utf-8');
+      const parsed = JSON.parse(raw) as Partial<PersistedDatabase>;
+      return normalizeParsedDb(parsed).db;
+    } catch {
+      // Fallback to deterministic fresh DB
+    }
+  }
+
   return {
     submissions: [],
     passwords: generateDeterministicGroupPasswords(),
     tokenSecret: generateDeterministicTokenSecret(),
     artworksMeta: {},
     driveConfig: defaultDriveConfig(),
+    revision: 0,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -271,7 +286,11 @@ export async function loadDatabase(): Promise<PersistedDatabase> {
 
   if (!fs.existsSync(DB_FILE)) {
     const initial = createInitialDb();
-    await saveDatabase(initial);
+    ensureDirectories();
+    fs.writeFileSync(DB_FILE, JSON.stringify(initial, null, 2), 'utf-8');
+    if (getRedisConfig()) {
+      await redisCommand(['SET', 'ecoprint:db', JSON.stringify(initial, null, 2)]).catch(() => {});
+    }
     return initial;
   }
 
@@ -292,6 +311,7 @@ export async function loadDatabase(): Promise<PersistedDatabase> {
 
 export async function saveDatabase(db: PersistedDatabase): Promise<void> {
   ensureDirectories();
+  db.revision = (db.revision ?? 0) + 1;
   db.updatedAt = new Date().toISOString();
   const serialized = JSON.stringify(db, null, 2);
   fs.writeFileSync(DB_FILE, serialized, 'utf-8');

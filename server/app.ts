@@ -90,6 +90,7 @@ function buildApiState(db: PersistedDatabase) {
     submissions: db.submissions,
     recapitulation: computeRecapitulation(db.submissions, catalog),
     driveConfig: db.driveConfig,
+    revision: db.revision ?? 0,
     updatedAt: db.updatedAt,
     runtimeInfo: getStorageStatus(),
   };
@@ -361,14 +362,15 @@ export function createApiApp(): express.Express {
           return;
         }
       } else {
-        const match = (imageDataUrl || '').match(/^data:([^;,]+)?;base64,([A-Za-z0-9+/=]+)$/i);
+        const match = (imageDataUrl || '').match(/^data:([^,]*);base64,([A-Za-z0-9+/=\s]+)$/i);
         if (!match) {
           res.status(400).json({
             error: 'Format gambar tidak valid. Gunakan file gambar JPG, PNG, WebP, atau HEIC.',
           });
           return;
         }
-        const dataUrlMime = (match[1] || '').toLowerCase();
+        const dataUrlHeader = match[1] || '';
+        const dataUrlMime = (dataUrlHeader.split(';')[0] || '').trim().toLowerCase();
         const candidateMime = (originalMimeType || dataUrlMime || 'image/jpeg').toLowerCase();
         const isAllowedImage =
           candidateMime.startsWith('image/') ||
@@ -384,7 +386,7 @@ export function createApiApp(): express.Express {
         detectedMime = candidateMime.startsWith('image/')
           ? candidateMime
           : MIME_BY_EXT[ext] ?? 'image/jpeg';
-        buffer = Buffer.from(match[2], 'base64');
+        buffer = Buffer.from(match[2].replace(/\s+/g, ''), 'base64');
       }
 
       if (buffer.byteLength > 25 * 1024 * 1024) {

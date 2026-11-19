@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Cloud, Download, ImagePlus, Trash2, Upload, X } from 'lucide-react';
 import { getCachedDriveToken } from '../lib/googleDriveAuth';
 import type { ArtworkGroup, DriveArchiveConfig } from '../shared/ecoprint';
@@ -48,8 +48,8 @@ async function arrayBufferToBase64(buffer: ArrayBuffer): Promise<string> {
   });
 }
 
-const CHUNK_THRESHOLD_BYTES = 2 * 1024 * 1024; // 2 MB
-const CHUNK_RAW_BYTES = 1800 * 1024; // 1.8 MB raw (~2.4 MB base64 JSON, safely below Vercel 4.5 MB limit)
+const CHUNK_THRESHOLD_BYTES = 1.5 * 1024 * 1024; // 1.5 MB
+const CHUNK_RAW_BYTES = 1500 * 1024; // 1.5 MB raw (~2.0 MB base64 JSON, safely below Vercel 4.5 MB limit)
 
 export const MyArtworkUploadModal: React.FC<MyArtworkUploadModalProps> = ({
   isOpen,
@@ -72,9 +72,15 @@ export const MyArtworkUploadModal: React.FC<MyArtworkUploadModalProps> = ({
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const initializedForGroupRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (isOpen && group) {
+    if (!isOpen) {
+      initializedForGroupRef.current = null;
+      return;
+    }
+    if (group && initializedForGroupRef.current !== group.groupId) {
+      initializedForGroupRef.current = group.groupId;
       setSelectedFile(null);
       setPreviewDataUrl(null);
       setMemberNames(group.memberNames || '');
@@ -189,9 +195,22 @@ export const MyArtworkUploadModal: React.FC<MyArtworkUploadModalProps> = ({
           description: description.trim(),
         }),
       });
-      const payload = await res.json();
+      const rawText = await res.text();
+      let payload: any = null;
+      try {
+        payload = rawText ? JSON.parse(rawText) : null;
+      } catch {
+        payload = null;
+      }
       if (!res.ok) {
-        setError(payload.error ?? 'Gagal menyimpan perubahan karya.');
+        setError(
+          payload?.error ??
+            `Gagal menyimpan perubahan karya (HTTP ${res.status}).`,
+        );
+        return;
+      }
+      if (!payload?.state) {
+        setError('Respons server tidak lengkap. Silakan coba simpan ulang.');
         return;
       }
       onUpdated(payload.state);
