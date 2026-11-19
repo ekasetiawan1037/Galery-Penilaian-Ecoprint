@@ -43,12 +43,19 @@ import {
   type RecapitulationSummary,
 } from './shared/ecoprint';
 
+interface RuntimeStorageInfo {
+  isVercel: boolean;
+  storagePersistent: boolean;
+  storageProvider: 'local-disk' | 'upstash-redis' | 'vercel-tmp';
+}
+
 interface ApiStateResponse {
   catalog: ArtworkGroup[];
   submissions: AssessmentSubmission[];
   recapitulation: RecapitulationSummary;
   driveConfig: DriveArchiveConfig;
   updatedAt: string;
+  runtimeInfo?: RuntimeStorageInfo;
 }
 
 const SESSION_TOKEN_KEY = 'ecoprint_group_token';
@@ -71,6 +78,7 @@ export default function App() {
     computeRecapitulation([], BASE_ARTWORK_CATALOG),
   );
   const [driveConfig, setDriveConfig] = useState<DriveArchiveConfig>(INITIAL_DRIVE_CONFIG);
+  const [runtimeInfo, setRuntimeInfo] = useState<RuntimeStorageInfo | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -124,6 +132,9 @@ export default function App() {
     setRecapitulation(data.recapitulation);
     if (data.driveConfig) {
       setDriveConfig(data.driveConfig);
+    }
+    if (data.runtimeInfo) {
+      setRuntimeInfo(data.runtimeInfo);
     }
   }, []);
 
@@ -799,6 +810,7 @@ export default function App() {
             submissions={submissions}
             recapitulation={recapitulation}
             driveConfig={driveConfig}
+            runtimeInfo={runtimeInfo}
             driveUser={driveUser}
             driveAccessToken={driveAccessToken}
             driveError={driveError}

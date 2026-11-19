@@ -33,12 +33,19 @@ import {
   type RecapitulationSummary,
 } from '../shared/ecoprint';
 
+interface RuntimeStorageInfo {
+  isVercel: boolean;
+  storagePersistent: boolean;
+  storageProvider: 'local-disk' | 'upstash-redis' | 'vercel-tmp';
+}
+
 interface AdminViewProps {
   adminToken: string | null;
   catalog: ArtworkGroup[];
   submissions: AssessmentSubmission[];
   recapitulation: RecapitulationSummary;
   driveConfig: DriveArchiveConfig;
+  runtimeInfo?: RuntimeStorageInfo | null;
   driveUser: User | null;
   driveAccessToken: string | null;
   driveError: string | null;
@@ -76,6 +83,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
   submissions,
   recapitulation,
   driveConfig,
+  runtimeInfo,
   driveUser,
   driveAccessToken,
   driveError,
@@ -288,6 +296,30 @@ export const AdminView: React.FC<AdminViewProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Vercel / Storage Persistence Notice when running without external KV */}
+      {runtimeInfo && !runtimeInfo.storagePersistent && (
+        <div className="p-4 rounded-xl bg-[#FFFBEB] border border-[#FDE68A] text-xs text-[#92400E] space-y-1.5">
+          <div className="font-semibold flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden="true" />
+            <span>
+              Mode Vercel Serverless Sementara (Belum Ada Database Eksternal Terhubung)
+            </span>
+          </div>
+          <p className="leading-relaxed">
+            Aplikasi sudah aktif dan langsung bisa digunakan. Agar data suara &amp; foto tidak hilang saat server Vercel istirahat (*cold start*), hubungkan <strong>Upstash Redis / Vercel KV</strong> (<span className="font-mono">UPSTASH_REDIS_REST_URL</span> &amp; <span className="font-mono">UPSTASH_REDIS_REST_TOKEN</span>) di Vercel Environment Variables, lalu klik <strong>Sign in with Google</strong> untuk menyimpan file permanen di Google Drive. Jika domain Vercel baru diblokir saat Sign in with Google, tambahkan domain saat ini ke{' '}
+            <a
+              href="https://console.firebase.google.com/project/gen-lang-client-0705943683/authentication/settings"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline font-semibold"
+            >
+              Firebase Authorized Domains
+            </a>
+            .
+          </p>
+        </div>
+      )}
 
       {/* Google Drive Archive & Auto-Sync Section */}
       <div className="bg-white border border-[#E3DED4] rounded-xl overflow-hidden">

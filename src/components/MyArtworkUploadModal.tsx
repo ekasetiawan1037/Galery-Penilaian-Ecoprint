@@ -34,6 +34,23 @@ async function readOriginalFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
+async function arrayBufferToBase64(buffer: ArrayBuffer): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const blob = new Blob([buffer]);
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Gagal mengonversi potongan file asli.'));
+    reader.onload = () => {
+      const dataUrl = String(reader.result || '');
+      const commaIdx = dataUrl.indexOf(',');
+      resolve(commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl);
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
+const CHUNK_THRESHOLD_BYTES = 2 * 1024 * 1024; // 2 MB
+const CHUNK_RAW_BYTES = 1800 * 1024; // 1.8 MB raw (~2.4 MB base64 JSON, safely below Vercel 4.5 MB limit)
+
 export const MyArtworkUploadModal: React.FC<MyArtworkUploadModalProps> = ({
   isOpen,
   onClose,
@@ -52,6 +69,7 @@ export const MyArtworkUploadModal: React.FC<MyArtworkUploadModalProps> = ({
   const [mordant, setMordant] = useState('');
   const [description, setDescription] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
@@ -66,6 +84,7 @@ export const MyArtworkUploadModal: React.FC<MyArtworkUploadModalProps> = ({
       setFabric(group.fabric);
       setMordant(group.mordant);
       setDescription(group.description);
+      setUploadProgress(null);
       setError(null);
       setConfirmDeleteOpen(false);
     }
@@ -100,8 +119,46 @@ export const MyArtworkUploadModal: React.FC<MyArtworkUploadModalProps> = ({
     }
 
     setIsSaving(true);
+    setUploadProgress(null);
     setError(null);
     try {
+      let chunkPayload: { uploadId: string; totalChunks: number } | null = null;
+
+      if (selectedFile && selectedFile.size > CHUNK_THRESHOLD_BYTES) {
+        const uploadId = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+        const totalChunks = Math.ceil(selectedFile.size / CHUNK_RAW_BYTES);
+        for (let i = 0; i < totalChunks; i++) {
+          setUploadProgress(`Mengunggah bagian ${i + 1} dari ${totalChunks}...`);
+          const start = i * CHUNK_RAW_BYTES;
+          const end = Math.min(selectedFile.size, start + CHUNK_RAW_BYTES);
+          const sliceBuffer = await selectedFile.slice(start, end).arrayBuffer();
+          const chunkBase64 = await arrayBufferToBase64(sliceBuffer);
+          const chunkRes = await fetch(
+            `/api/artworks/${encodeURIComponent(group.groupId)}/photo-chunk`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${authToken}`,
+              },
+              body: JSON.stringify({
+                uploadId,
+                chunkIndex: i,
+                totalChunks,
+                chunkBase64,
+              }),
+            },
+          );
+          if (!chunkRes.ok) {
+            const errBody = await chunkRes.json().catch(() => ({}));
+            setError(errBody.error ?? 'Gagal mengunggah potongan foto ukuran asli.');
+            return;
+          }
+        }
+        setUploadProgress('Menyimpan file asli...');
+        chunkPayload = { uploadId, totalChunks };
+      }
+
       const res = await fetch(`/api/artworks/${encodeURIComponent(group.groupId)}/photo`, {
         method: 'POST',
         headers: {
@@ -109,13 +166,20 @@ export const MyArtworkUploadModal: React.FC<MyArtworkUploadModalProps> = ({
           Authorization: `Bearer ${authToken}`,
         },
         body: JSON.stringify({
-          ...(previewDataUrl && selectedFile
+          ...(chunkPayload
             ? {
-                imageDataUrl: previewDataUrl,
-                originalFileName: selectedFile.name,
-                originalMimeType: selectedFile.type || 'image/jpeg',
+                uploadId: chunkPayload.uploadId,
+                totalChunks: chunkPayload.totalChunks,
+                originalFileName: selectedFile!.name,
+                originalMimeType: selectedFile!.type || 'image/jpeg',
               }
-            : {}),
+            : previewDataUrl && selectedFile
+              ? {
+                  imageDataUrl: previewDataUrl,
+                  originalFileName: selectedFile.name,
+                  originalMimeType: selectedFile.type || 'image/jpeg',
+                }
+              : {}),
           memberNames: memberNames.trim(),
           artworkTitle: artworkTitle.trim(),
           leaves: leaves.trim(),
@@ -141,6 +205,7 @@ export const MyArtworkUploadModal: React.FC<MyArtworkUploadModalProps> = ({
       setError('Gagal menghubungi server saat menyimpan karya.');
     } finally {
       setIsSaving(false);
+      setUploadProgress(null);
     }
   };
 
@@ -445,7 +510,7 @@ export const MyArtworkUploadModal: React.FC<MyArtworkUploadModalProps> = ({
               disabled={isSaving}
               className="px-5 py-2 text-sm font-semibold rounded-lg bg-[#1B4332] hover:bg-[#143326] disabled:opacity-50 text-white"
             >
-              {isSaving ? 'Menyimpan...' : 'Simpan Perubahan Karya'}
+              {isSaving ? (uploadProgress ?? 'Menyimpan...') : 'Simpan Perubahan Karya'}
             </button>
           </div>
         </form>

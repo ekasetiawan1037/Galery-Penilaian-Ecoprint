@@ -1,4 +1,3 @@
-import fs from 'fs';
 import {
   type ArtworkGroup,
   type DriveArchiveConfig,
@@ -392,12 +391,11 @@ export async function uploadBinaryFileToDrive(
   accessToken: string,
   targetFolderId: string,
   group: ArtworkGroup,
-  filePath: string,
+  fileBuffer: Buffer,
   originalFileName: string,
   mimeType: string,
 ): Promise<DriveFileSummary> {
   const base = getDriveApiBase();
-  const fileBuffer = fs.readFileSync(filePath);
   const safeTitle = group.artworkTitle.replace(/[^a-zA-Z0-9-_ ]/g, '').trim() || 'Karya';
   const driveName = `${group.groupId}_Kls${group.className}_${safeTitle}_${originalFileName}`;
   const memberInfo = group.memberNames ? ` | Anggota: ${group.memberNames}` : '';
@@ -442,7 +440,7 @@ export async function uploadBinaryFileToDrive(
       'Content-Type': mimeType,
       'Content-Length': String(fileBuffer.byteLength),
     },
-    body: fileBuffer,
+    body: new Uint8Array(fileBuffer),
   });
 
   if (!putRes.ok) {
@@ -552,7 +550,7 @@ async function upsertTextFileToDrive(
           'Content-Type': mimeType,
           'Content-Length': String(buf.byteLength),
         },
-        body: buf,
+        body: new Uint8Array(buf),
       },
     );
     if (patchRes.ok) {
@@ -593,7 +591,7 @@ async function upsertTextFileToDrive(
       'Content-Type': mimeType,
       'Content-Length': String(buf.byteLength),
     },
-    body: buf,
+    body: new Uint8Array(buf),
   });
   if (!putRes.ok) {
     throw parseDriveError(putRes.status, await putRes.text(), `Gagal menulis ${fileName}`);
@@ -669,7 +667,7 @@ export async function runFullDriveSync(params: {
   driveConfig: DriveArchiveConfig;
   catalog: ArtworkGroup[];
   recapitulation: RecapitulationSummary;
-  findUploadedFile: (groupId: string) => { path: string; mimeType: string } | null;
+  readUploadedFileBuffer: (groupId: string) => Promise<{ buffer: Buffer; mimeType: string } | null>;
   applyOpenAccess?: boolean;
   forceArchiveDocs?: boolean;
 }): Promise<{
@@ -689,7 +687,7 @@ export async function runFullDriveSync(params: {
     driveConfig,
     catalog,
     recapitulation,
-    findUploadedFile,
+    readUploadedFileBuffer,
     applyOpenAccess = true,
     forceArchiveDocs = false,
   } = params;
@@ -718,8 +716,8 @@ export async function runFullDriveSync(params: {
   const updatedCatalog = [...catalog];
 
   for (const art of pendingGroups) {
-    const fileOnDisk = findUploadedFile(art.groupId);
-    if (!fileOnDisk) continue;
+    const fileData = await readUploadedFileBuffer(art.groupId);
+    if (!fileData) continue;
 
     const classFolderId = await ensureClassSubfolder(
       accessToken,
@@ -734,9 +732,9 @@ export async function runFullDriveSync(params: {
       accessToken,
       classFolderId,
       art,
-      fileOnDisk.path,
+      fileData.buffer,
       art.originalFileName || `${art.groupId}.jpg`,
-      art.originalMimeType || fileOnDisk.mimeType,
+      art.originalMimeType || fileData.mimeType,
     );
 
     const syncedAt = new Date().toISOString();

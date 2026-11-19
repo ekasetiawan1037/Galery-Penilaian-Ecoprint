@@ -96,8 +96,10 @@ export async function signInWithGoogleDrive(): Promise<{
       throw new Error('Login Google Drive dibatalkan sebelum selesai.');
     }
     if (code === 'auth/unauthorized-domain') {
+      const host =
+        typeof window !== 'undefined' ? window.location.hostname : 'domain Vercel Anda';
       throw new Error(
-        'Domain aplikasi belum terdaftar di Firebase Auth authorizedDomains.',
+        `Domain "${host}" belum didaftarkan di Firebase Authorized Domains. Tambahkan "${host}" di Firebase Console -> Authentication -> Settings -> Authorized domains (project ${firebaseConfig.projectId}).`,
       );
     }
     throw err instanceof Error
